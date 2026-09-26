@@ -1,114 +1,87 @@
 package com.drivingassist.spatialcopilot
 
 import android.app.Application
-import android.content.Context
+import android.content.Intent
 import android.os.SystemClock
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.drivingassist.spatialcopilot.model.SpatialInstruction
-import com.drivingassist.spatialcopilot.perception.LinkState
-import com.drivingassist.spatialcopilot.perception.PerceptionClient
-import com.drivingassist.spatialcopilot.perception.ServerEvent
-import com.drivingassist.spatialcopilot.perception.World
+import com.drivingassist.spatialcopilot.session.AppSettings
+import com.drivingassist.spatialcopilot.session.CopilotSession
+import com.drivingassist.spatialcopilot.session.StatusModel
+import com.drivingassist.spatialcopilot.session.StatusUi
+import com.drivingassist.spatialcopilot.voice.VoiceCoordinator
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-data class CopilotUi(
-    val instruction: SpatialInstruction,
-    val link: LinkState,
-    val linkDetail: String,
-    val serverUrl: String,
-)
-
+/**
+ * Holds the settings and the current [CopilotSession]. A change of source, server, clip or camera
+ * set-up closes the session and builds a new one; debug and voice switches apply in place.
+ * Created on the main thread, which the session (ExoPlayer, LocationManager) needs.
+ */
 class CopilotViewModel(app: Application) : AndroidViewModel(app) {
-    private val prefs = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-    private val initialUrl = prefs.getString(KEY_URL, DEFAULT_URL) ?: DEFAULT_URL
+    private val _settings = MutableStateFlow(AppSettings.load(app))
+    val settings: StateFlow<AppSettings> = _settings.asStateFlow()
 
-    private val world = MutableStateFlow(World())
-    private val elapsed = MutableStateFlow(0.0)
-    private val link = MutableStateFlow(LinkState.CONNECTING)
-    private val linkDetail = MutableStateFlow("")
-    private val serverUrl = MutableStateFlow(initialUrl)
+    val voice = VoiceCoordinator(app, viewModelScope)
 
-    private val client = PerceptionClient(
-        scope = viewModelScope,
-        onEvent = { event ->
-            when (event) {
-                is ServerEvent.Ignored, is ServerEvent.Skip, is ServerEvent.Failure -> Unit
-                else -> world.value = world.value.apply(event)
-            }
-        },
-        onStatus = { state, detail ->
-            link.value = state
-            linkDetail.value = detail
-        },
-    )
+    private val _session = MutableStateFlow(newSession(_settings.value))
+    val session: StateFlow<CopilotSession> = _session.asStateFlow()
 
-    val ui: StateFlow<CopilotUi> = combine(world, elapsed, link, linkDetail, serverUrl) { geometry, time, state, detail, url ->
-        CopilotUi(
-            instruction = geometry.instruction(time),
-            link = state,
-            linkDetail = detail,
-            serverUrl = url,
-        )
-    }.stateIn(
-        viewModelScope,
-        SharingStarted.WhileSubscribed(5_000),
-        CopilotUi(
-            instruction = World().instruction(0.0),
-            link = LinkState.CONNECTING,
-            linkDetail = "",
-            serverUrl = initialUrl,
-        ),
-    )
+    private val _status = MutableStateFlow(StatusUi.STARTING)
+
+    /** Chip text, banners and debug numbers, refreshed at 4 Hz (the link stats change every 50 ms). */
+    val status: StateFlow<StatusUi> = _status.asStateFlow()
+
+    private var intentApplied = false
 
     init {
-        val started = SystemClock.elapsedRealtime()
         viewModelScope.launch {
             while (isActive) {
-                elapsed.value = (SystemClock.elapsedRealtime() - started) / 1000.0
-                delay(80)
+                _status.value = StatusModel.compute(_session.value, _settings.value, voice.state.value, SystemClock.elapsedRealtime())
+                delay(250)
             }
         }
-        client.connect(initialUrl)
     }
 
-    fun canSendFrame(): Boolean = client.canUplink()
-
-    fun onCameraFrame(
-        jpeg: ByteArray,
-        rotationDegrees: Int,
-        bufferWidth: Int,
-        bufferHeight: Int,
-        timestampNs: Long,
-    ) {
-        client.noteUprightSize(bufferWidth, bufferHeight, rotationDegrees)
-        val captureTimeNs = if (timestampNs > 0L) timestampNs else SystemClock.elapsedRealtimeNanos()
-        client.offerFrame(jpeg, rotationDegrees, captureTimeNs)
+    /** Launch extras (`perception.source`, `perception.url`, ...), applied once per activity instance. */
+    fun onLaunchIntent(intent: Intent?) {
+        if (intentApplied) return
+        intentApplied = true
+        val next = AppSettings.withExtras(_settings.value, intent)
+        if (next != _settings.value) apply(next)
     }
 
-    fun updateServerUrl(raw: String): Boolean {
-        val url = raw.trim()
-        if (!url.startsWith("ws://") && !url.startsWith("wss://")) return false
-        serverUrl.value = url
-        prefs.edit().putString(KEY_URL, url).apply()
-        client.connect(url)
-        return true
+    fun apply(next: AppSettings) {
+        val previous = _settings.value
+        if (next == previous) return
+        _settings.value = next
+        next.save(getApplication())
+        if (sessionKey(next) != sessionKey(previous)) {
+            _session.value.close()
+            _session.value = newSession(next)
+        } else if (next.voice != previous.voice) {
+            voice.attach(_session.value, next)
+        }
     }
+
+    fun toggleDebug() = apply(_settings.value.copy(debug = !_settings.value.debug))
+
+    fun reclaim() = _session.value.reclaim()
 
     override fun onCleared() {
-        client.close()
+        voice.close()
+        _session.value.close()
     }
 
-    private companion object {
-        const val PREFS = "spatial_copilot"
-        const val KEY_URL = "server_url"
-        const val DEFAULT_URL = "ws://127.0.0.1:8765/perception"
+    /** The voice layer subscribes to the session's events before it connects (the events flow has no replay). */
+    private fun newSession(s: AppSettings) = CopilotSession(getApplication(), s).also {
+        voice.attach(it, s)
+        it.start()
     }
+
+    private fun sessionKey(s: AppSettings) = listOf(s.mode, s.serverUrl, s.simVideoId, s.mountHeightMeters, s.gateCriticalBySpeed, s.cameraOnMonitor)
 }

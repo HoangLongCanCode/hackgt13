@@ -4,258 +4,369 @@ import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.drivingassist.spatialcopilot.CopilotUi
+import com.drivingassist.copilot.context.DrivingContext
+import com.drivingassist.copilot.context.FollowingState
+import com.drivingassist.copilot.context.Maneuver
+import com.drivingassist.copilot.context.WorldSnapshot
+import com.drivingassist.copilot.perception.LightState
 import com.drivingassist.spatialcopilot.CopilotViewModel
+import com.drivingassist.spatialcopilot.ar.ArSceneBuilder
 import com.drivingassist.spatialcopilot.camera.DrivingCamera
-import com.drivingassist.spatialcopilot.model.ArrowHeading
-import com.drivingassist.spatialcopilot.perception.LinkState
+import com.drivingassist.spatialcopilot.nav.RouteGuide
+import com.drivingassist.spatialcopilot.session.AppSettings
+import com.drivingassist.spatialcopilot.session.CopilotSession
+import com.drivingassist.spatialcopilot.session.SourceMode
+import com.drivingassist.spatialcopilot.session.StatusUi
+import kotlin.math.roundToInt
 
 private val Mint = Color(0xFF7DFFC3)
 private val Ink = Color(0xCC101614)
+private val Amber = Color(0xFFFFC56B)
+private val Alert = Color(0xFFFF5A4E)
 
 @Composable
 fun CopilotScreen(viewModel: CopilotViewModel) {
-    val ui by viewModel.ui.collectAsStateWithLifecycle()
+    val settings by viewModel.settings.collectAsStateWithLifecycle()
+    val session by viewModel.session.collectAsStateWithLifecycle()
+    val status by viewModel.status.collectAsStateWithLifecycle()
+    val context by session.context.collectAsStateWithLifecycle()
+    val route by session.route.collectAsStateWithLifecycle()
     val view = LocalView.current
     DisposableEffect(view) {
         view.keepScreenOn = true
         onDispose { view.keepScreenOn = false }
     }
 
-    var cameraGranted by remember { mutableStateOf(false) }
-    var showServer by remember { mutableStateOf(false) }
-    val context = androidx.compose.ui.platform.LocalContext.current
-    val permissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission(),
-    ) { granted -> cameraGranted = granted }
-
-    androidx.compose.runtime.LaunchedEffect(Unit) {
-        val granted = ContextCompat.checkSelfPermission(
-            context,
-            Manifest.permission.CAMERA,
-        ) == PackageManager.PERMISSION_GRANTED
-        cameraGranted = granted
-        if (!granted) permissionLauncher.launch(Manifest.permission.CAMERA)
+    val appContext = LocalContext.current
+    fun granted(p: String) = ContextCompat.checkSelfPermission(appContext, p) == PackageManager.PERMISSION_GRANTED
+    var cameraGranted by remember { mutableStateOf(granted(Manifest.permission.CAMERA)) }
+    var showSettings by remember { mutableStateOf(false) }
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
+        cameraGranted = result[Manifest.permission.CAMERA] ?: granted(Manifest.permission.CAMERA)
+        if (granted(Manifest.permission.ACCESS_FINE_LOCATION) || granted(Manifest.permission.ACCESS_COARSE_LOCATION)) session.startLocation()
+    }
+    // Granted in system Settings while we were away: pick it up on resume.
+    LifecycleResumeEffect(session) {
+        cameraGranted = granted(Manifest.permission.CAMERA)
+        onPauseOrDispose { }
+    }
+    LaunchedEffect(session) {
+        if (session.settings.mode != SourceMode.LIVE) return@LaunchedEffect
+        val missing = listOf(Manifest.permission.CAMERA, Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
+            .filterNot(::granted)
+        if (missing.isEmpty()) session.startLocation() else launcher.launch(missing.toTypedArray())
     }
 
     MaterialTheme(colorScheme = darkColorScheme()) {
         Box(Modifier.fillMaxSize().background(Color.Black)) {
-            if (cameraGranted) {
-                DrivingCamera(
-                    analysisEnabled = viewModel::canSendFrame,
-                    onFrame = viewModel::onCameraFrame,
-                    modifier = Modifier.fillMaxSize(),
-                )
+            when (session.settings.mode) {
+                SourceMode.LIVE -> if (cameraGranted) {
+                    DrivingCamera(
+                        analyzer = session.camera?.let { it::analyze },
+                        onError = { session.reportProblem(it) },
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+                SourceMode.SIM -> session.sim?.let { SimVideoBackground(it, Modifier.fillMaxSize()) }
+                SourceMode.DEMO -> DemoBackdrop()
             }
-            SpatialArEngine(instruction = ui.instruction, modifier = Modifier.fillMaxSize())
+            SpatialArEngine(session = session, debug = settings.debug, modifier = Modifier.fillMaxSize())
             Chrome(
-                ui = ui,
-                cameraGranted = cameraGranted,
-                onServerClick = { showServer = true },
+                session = session,
+                settings = settings,
+                status = status,
+                context = context,
+                route = route,
+                cameraMissing = session.settings.mode == SourceMode.LIVE && !cameraGranted,
+                onAskCamera = { launcher.launch(arrayOf(Manifest.permission.CAMERA)) },
+                onChipClick = { if (status.line1.contains("TAKEN OVER")) viewModel.reclaim() else showSettings = true },
+                onChipLongClick = viewModel::toggleDebug,
             )
-            if (showServer) {
-                ServerDialog(
-                    initialUrl = ui.serverUrl,
-                    onDismiss = { showServer = false },
-                    onConnect = { url ->
-                        val ok = viewModel.updateServerUrl(url)
-                        if (ok) showServer = false
-                        ok
-                    },
+            if (showSettings) {
+                SettingsDialog(
+                    initial = settings,
+                    onDismiss = { showSettings = false },
+                    onApply = { viewModel.apply(it); showSettings = false },
+                    onSimToggle = session.sim?.let { sim -> { sim.togglePlay() } },
                 )
             }
         }
     }
 }
 
+/** DEMO has no picture: a plain night-road gradient under the scripted lanes. */
+@Composable
+private fun DemoBackdrop() {
+    Box(
+        Modifier.fillMaxSize().background(
+            Brush.verticalGradient(0f to Color(0xFF0B1320), 0.46f to Color(0xFF1B2433), 0.47f to Color(0xFF2A2D31), 1f to Color(0xFF15171A)),
+        ),
+    )
+}
+
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun Chrome(
-    ui: CopilotUi,
-    cameraGranted: Boolean,
-    onServerClick: () -> Unit,
+    session: CopilotSession,
+    settings: AppSettings,
+    status: StatusUi,
+    context: DrivingContext,
+    route: RouteGuide?,
+    cameraMissing: Boolean,
+    onAskCamera: () -> Unit,
+    onChipClick: () -> Unit,
+    onChipLongClick: () -> Unit,
 ) {
-    Box(
-        Modifier
-            .fillMaxSize()
-            .statusBarsPadding()
-            .navigationBarsPadding()
-            .padding(16.dp),
-    ) {
-        StatusChip(
-            label = statusLabel(ui.link, ui.instruction.source),
-            detail = ui.linkDetail,
-            modifier = Modifier.align(Alignment.TopStart).clickable(onClick = onServerClick),
-        )
-        ui.instruction.navigation.exit?.let { exit ->
-            ExitHud(
-                label = exit.label,
-                distance = exit.distanceLabel,
-                laneHint = laneHint(ui),
-                modifier = Modifier.align(Alignment.TopEnd),
+    Box(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(16.dp)) {
+        Column(Modifier.align(Alignment.TopStart), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            StatusChip(
+                status = status,
+                debug = settings.debug,
+                modifier = Modifier.combinedClickable(onClick = onChipClick, onLongClick = onChipLongClick),
             )
+            if (settings.debug) DebugPanel(status.debugLines)
         }
-        if (!cameraGranted) {
-            Text(
-                text = "Allow the camera, then point it at the driving video.",
-                color = Color.White,
-                modifier = Modifier.align(Alignment.Center).padding(24.dp),
-            )
-        }
-        val audio = ui.instruction.navigation.audio
-        if (audio.isNotBlank()) {
-            Text(
-                text = audio,
-                color = Color.White,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Medium,
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .background(Ink, RoundedCornerShape(24.dp))
-                    .padding(horizontal = 18.dp, vertical = 10.dp),
-            )
+        route?.let { ManeuverCard(it, session.routeDistanceNow(it), Modifier.align(Alignment.TopEnd)) }
+        status.banner?.let { Banner(it, Modifier.align(Alignment.TopCenter).padding(top = 4.dp)) }
+        alertText(context, session.bridge?.world?.value)?.let { (text, critical) -> AlertPill(text, critical, Modifier.align(Alignment.BottomCenter)) }
+        if (cameraMissing) {
+            Column(Modifier.align(Alignment.Center).padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(text = "Allow the camera, then point it at the road or the driving video.", color = Color.White)
+                TextButton(onClick = onAskCamera) { Text("Allow camera") }
+            }
         }
     }
 }
 
+/**
+ * The contextual alert under the road, measurable wording only: the lead vehicle in CLOSE / TOO CLOSE with
+ * its measured distance, a red light or a pedestrian in the path. Nothing without a distance for the lead
+ * (never invent a number); green and unknown lights are never shown as alerts.
+ */
+private fun alertText(ctx: DrivingContext, world: WorldSnapshot?): Pair<String, Boolean>? {
+    if (ctx.perceptionStale) return null
+    val f = ctx.following
+    val d = f.distanceMeters
+    if (d != null && f.state == FollowingState.CRITICAL) return "TOO CLOSE · Vehicle ahead: ${ArSceneBuilder.fmt1(d)} m" to true
+    ctx.pedestriansInPath.firstOrNull()?.let { p ->
+        return (p.distanceMeters?.let { "Pedestrian ahead: ${ArSceneBuilder.fmt1(it)} m" } ?: "Pedestrian ahead") to true
+    }
+    if (d != null && f.state == FollowingState.CLOSE) return "Vehicle ahead: ${ArSceneBuilder.fmt1(d)} m" to false
+    // Lights: the same plausibility checks the voice uses (audio_cues.v1.json alert.red_light), so a misread
+    // signal at the stop line or off to the side is not shown as an alert.
+    ctx.trafficLight?.takeIf { it.state == LightState.RED || it.state == LightState.YELLOW }?.takeIf { l ->
+        val o = world?.objects?.get(l.trackId)
+        val d = l.distanceMeters
+        d != null && d in 15.0..60.0 && o?.rawLightState == l.state &&
+            (o.lightConfidence ?: 1.0) >= 0.6 && kotlin.math.abs(o.lateralMeters ?: 0.0) <= 6.0
+    }?.let { l ->
+        val name = if (l.state == LightState.RED) "Red light" else "Yellow light"
+        return (l.distanceMeters?.let { "$name: ${it.roundToInt()} m" } ?: name) to false
+    }
+    return null
+}
+
 @Composable
-private fun StatusChip(label: String, detail: String, modifier: Modifier = Modifier) {
+private fun StatusChip(status: StatusUi, debug: Boolean, modifier: Modifier = Modifier) {
+    val color = when (status.level) {
+        StatusUi.Level.OK -> Mint
+        StatusUi.Level.WARN -> Amber
+        StatusUi.Level.ERROR -> Alert
+    }
     Column(
         modifier = modifier
             .background(Ink, RoundedCornerShape(14.dp))
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .widthIn(max = 420.dp),
     ) {
-        Text(text = label, color = Mint, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-        if (detail.isNotBlank()) {
-            Text(text = detail, color = Color(0xFFFFC56B), fontSize = 12.sp)
-        } else {
-            Text(text = "tap to set server", color = Color.White.copy(alpha = 0.65f), fontSize = 11.sp)
-        }
+        Text(text = status.line1 + if (debug) " · DEBUG" else "", color = color, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        Text(
+            text = status.line2 ?: "tap: settings · hold: debug",
+            color = if (status.line2 != null) Amber else Color.White.copy(alpha = 0.65f),
+            fontSize = 11.sp,
+        )
     }
 }
 
 @Composable
-private fun ExitHud(
-    label: String,
-    distance: String,
-    laneHint: String?,
-    modifier: Modifier = Modifier,
-) {
+private fun DebugPanel(lines: List<String>) {
+    Column(
+        Modifier
+            .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(10.dp))
+            .padding(horizontal = 10.dp, vertical = 6.dp)
+            .widthIn(max = 520.dp),
+    ) {
+        lines.forEach { Text(it, color = Color.White.copy(alpha = 0.9f), fontSize = 11.sp, fontFamily = FontFamily.Monospace) }
+    }
+}
+
+@Composable
+private fun Banner(text: String, modifier: Modifier = Modifier) {
+    Text(
+        text = text,
+        color = Color.White,
+        fontSize = 14.sp,
+        modifier = modifier
+            .widthIn(max = 560.dp)
+            .background(Color(0xCC3A2A08), RoundedCornerShape(12.dp))
+            .border(1.dp, Amber.copy(alpha = 0.8f), RoundedCornerShape(12.dp))
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+    )
+}
+
+@Composable
+private fun AlertPill(text: String, critical: Boolean, modifier: Modifier = Modifier) {
+    val color = if (critical) Alert else Amber
+    Text(
+        text = text,
+        color = Color.White,
+        fontSize = if (critical) 22.sp else 18.sp,
+        fontWeight = if (critical) FontWeight.Bold else FontWeight.SemiBold,
+        modifier = modifier
+            .background(color.copy(alpha = if (critical) 0.85f else 0.55f), RoundedCornerShape(24.dp))
+            .padding(horizontal = 20.dp, vertical = 10.dp),
+    )
+}
+
+/** Next maneuver as phase1 describes it (DEMO: the placeholder route, labelled). */
+@Composable
+private fun ManeuverCard(route: RouteGuide, distanceNow: Double?, modifier: Modifier = Modifier) {
+    val dim = route.stale || route.offRoute
     Column(
         modifier = modifier
-            .border(1.dp, Mint.copy(alpha = 0.85f), RoundedCornerShape(18.dp))
+            .border(1.dp, (if (dim) Amber else Mint).copy(alpha = 0.85f), RoundedCornerShape(18.dp))
             .background(Color.Black.copy(alpha = 0.46f), RoundedCornerShape(18.dp))
             .padding(horizontal = 18.dp, vertical = 12.dp),
         horizontalAlignment = Alignment.End,
     ) {
         Text(
-            text = label,
-            color = Mint,
+            text = if (route.offRoute) "OFF ROUTE" else route.headline,
+            color = if (dim) Amber else Mint,
             fontSize = 22.sp,
             fontWeight = FontWeight.Bold,
             letterSpacing = 1.5.sp,
         )
-        Text(
-            text = distance,
-            color = Color.White,
-            fontSize = 40.sp,
-            fontWeight = FontWeight.Light,
-        )
-        if (laneHint != null) {
-            Text(text = laneHint, color = Mint, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.2.sp)
+        // "CONTINUE" has no maneuver point to count down to (phase1 reports 0 m at the start of a leg).
+        distanceNow?.takeIf { route.maneuver != Maneuver.FOLLOW_ROAD }?.let {
+            Text(text = RouteGuide.formatDistance(it), color = Color.White, fontSize = 40.sp, fontWeight = FontWeight.Light)
+        }
+        route.roadName?.takeIf { it.length <= 40 }?.let { Text(it, color = Color.White.copy(alpha = 0.85f), fontSize = 13.sp) }
+        val eta = route.etaSeconds?.let { "ETA ${RouteGuide.formatEta(it)}" }
+        val remaining = route.remainingMeters?.let { RouteGuide.formatDistance(it) + " left" }
+        listOfNotNull(remaining, eta).takeIf { it.isNotEmpty() }?.let {
+            Text(it.joinToString(" · "), color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp)
+        }
+        when {
+            route.provider == "demo" -> Text("DEMO ROUTE", color = Amber, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+            route.stale -> Text("ROUTE HELD · NO UPDATES", color = Amber, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
         }
     }
 }
 
 @Composable
-private fun ServerDialog(
-    initialUrl: String,
+private fun SettingsDialog(
+    initial: AppSettings,
     onDismiss: () -> Unit,
-    onConnect: (String) -> Boolean,
+    onApply: (AppSettings) -> Unit,
+    onSimToggle: (() -> Unit)?,
 ) {
-    var draft by remember(initialUrl) { mutableStateOf(initialUrl) }
+    var draft by remember(initial) { mutableStateOf(initial) }
+    var url by remember(initial) { mutableStateOf(initial.serverUrl) }
+    var video by remember(initial) { mutableStateOf(initial.simVideoId) }
     var error by remember { mutableStateOf<String?>(null) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Perception server") },
+        title = { Text("Spatial Copilot") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    "USB: adb reverse tcp:8765 tcp:8765, then use 127.0.0.1. On Wi-Fi, use the laptop's LAN address.",
-                    fontSize = 13.sp,
-                )
-                OutlinedTextField(
-                    value = draft,
-                    onValueChange = { draft = it },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("WebSocket URL") },
-                )
-                if (error != null) {
-                    Text(error!!, color = Color(0xFFFF8A80), fontSize = 12.sp)
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SourceMode.entries.forEach { m ->
+                        FilterChip(selected = draft.mode == m, onClick = { draft = draft.copy(mode = m) }, label = { Text(m.name) })
+                    }
                 }
+                Text(
+                    when (draft.mode) {
+                        SourceMode.LIVE -> "Tablet camera to the laptop. Navigation follows this tablet's GPS."
+                        SourceMode.SIM -> "Plays the clip on the tablet; the laptop analyses the same clip ahead of playback."
+                        SourceMode.DEMO -> "No laptop: scripted scene and placeholder route (Exit 56)."
+                    },
+                    fontSize = 12.sp,
+                )
+                OutlinedTextField(value = url, onValueChange = { url = it }, singleLine = true, modifier = Modifier.fillMaxWidth(), label = { Text("Laptop WebSocket URL") })
+                Text("USB: adb reverse tcp:8765 tcp:8765, then 127.0.0.1. Wi-Fi: the laptop's LAN address.", fontSize = 12.sp)
+                if (draft.mode == SourceMode.SIM) {
+                    OutlinedTextField(value = video, onValueChange = { video = it }, singleLine = true, modifier = Modifier.fillMaxWidth(), label = { Text("Sim clip id") })
+                    onSimToggle?.let { TextButton(onClick = it) { Text("Play / pause clip") } }
+                }
+                Toggle("Debug view (all boxes, lanes, fps, link)", draft.debug) { draft = draft.copy(debug = it) }
+                Toggle("Voice", draft.voice) { draft = draft.copy(voice = it) }
+                if (draft.mode == SourceMode.LIVE) {
+                    Toggle("Camera films a monitor (demo set-up)", draft.cameraOnMonitor) { draft = draft.copy(cameraOnMonitor = it) }
+                }
+                Toggle("Hold TOO CLOSE at CLOSE while stopped (route speed)", draft.gateCriticalBySpeed) { draft = draft.copy(gateCriticalBySpeed = it) }
+                error?.let { Text(it, color = Color(0xFFFF8A80), fontSize = 12.sp) }
             }
         },
         confirmButton = {
             TextButton(onClick = {
-                if (!onConnect(draft)) error = "Use a ws:// or wss:// URL"
-            }) { Text("Connect") }
+                val u = url.trim()
+                if (!AppSettings.isValidUrl(u)) { error = "Use a ws:// or wss:// URL"; return@TextButton }
+                onApply(draft.copy(serverUrl = u, simVideoId = video.trim().ifEmpty { AppSettings.DEFAULT_VIDEO }))
+            }) { Text("Apply") }
         },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
-        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
 
-private fun statusLabel(link: LinkState, source: String): String = when (link) {
-    LinkState.TAKEN_OVER -> "TAKEN OVER"
-    LinkState.CONNECTING -> if (source == "demo") "DEMO · connecting" else "CONNECTING"
-    LinkState.RECONNECTING -> if (source == "demo") "DEMO · reconnecting" else "RECONNECTING"
-    LinkState.LIVE -> when (source) {
-        "demo" -> "DEMO"
-        "live-sim-nav" -> "LIVE · sim nav"
-        else -> "LIVE"
-    }
-    LinkState.DEMO -> "DEMO"
-}
-
-private fun laneHint(ui: CopilotUi): String? {
-    val lane = ui.instruction.lanes.firstOrNull { it.arrow.highlighted } ?: return null
-    return when (lane.arrow.heading) {
-        ArrowHeading.RIGHT -> "RIGHT LANE"
-        ArrowHeading.LEFT -> "LEFT LANE"
-        ArrowHeading.STRAIGHT -> "LANE ${lane.index}"
+@Composable
+private fun Toggle(label: String, value: Boolean, onChange: (Boolean) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Switch(checked = value, onCheckedChange = onChange)
+        Text(label, fontSize = 13.sp)
     }
 }

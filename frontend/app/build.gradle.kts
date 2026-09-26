@@ -38,9 +38,21 @@ android {
     buildFeatures {
         compose = true
     }
+
+    // The agreed audio cue catalog stays in perception_engine/docs/audio (one source of truth);
+    // it is copied into the APK assets as audio/audio_cues.v1.json.
+    sourceSets["main"].assets.srcDir(layout.buildDirectory.dir("generated/audioCatalog"))
 }
 
+val copyAudioCatalog by tasks.registering(Copy::class) {
+    from(rootProject.file("../perception_engine/docs/audio/audio_cues.v1.json"))
+    into(layout.buildDirectory.dir("generated/audioCatalog/audio"))
+}
+tasks.named("preBuild") { dependsOn(copyAudioCatalog) }
+
 dependencies {
+    implementation(project(":perception-bridge"))
+
     val composeBom = platform("androidx.compose:compose-bom:2024.12.01")
     implementation(composeBom)
     implementation("androidx.compose.ui:ui")
@@ -61,6 +73,10 @@ dependencies {
     implementation("androidx.camera:camera-camera2:$camerax")
     implementation("androidx.camera:camera-lifecycle:$camerax")
     implementation("androidx.camera:camera-view:$camerax")
+
+    val media3 = "1.5.1"
+    implementation("androidx.media3:media3-exoplayer:$media3")
+    implementation("androidx.media3:media3-ui:$media3")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")

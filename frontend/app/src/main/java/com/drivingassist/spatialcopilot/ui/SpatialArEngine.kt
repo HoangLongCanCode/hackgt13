@@ -5,9 +5,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -15,278 +16,176 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.drivingassist.spatialcopilot.model.ArrowHeading
-import com.drivingassist.spatialcopilot.model.ImageBox
-import com.drivingassist.spatialcopilot.model.LaneSlot
-import com.drivingassist.spatialcopilot.model.Px
-import com.drivingassist.spatialcopilot.model.SpatialInstruction
-import kotlinx.coroutines.delay
-import kotlin.math.abs
-import kotlin.math.hypot
-import kotlin.math.max
+import com.drivingassist.spatialcopilot.ar.ArInput
+import com.drivingassist.spatialcopilot.ar.ArScene
+import com.drivingassist.spatialcopilot.ar.ArSceneBuilder
+import com.drivingassist.spatialcopilot.ar.DebugLayer
+import com.drivingassist.spatialcopilot.ar.LeadHighlight
+import com.drivingassist.spatialcopilot.ar.Vec2
+import com.drivingassist.spatialcopilot.ar.ViewRect
+import com.drivingassist.copilot.context.WorldSnapshot
+import com.drivingassist.spatialcopilot.ar.FillCenter
+import com.drivingassist.spatialcopilot.session.CopilotSession
+import com.drivingassist.spatialcopilot.session.SourceMode
 import kotlin.math.min
 import kotlin.math.sin
 
 private val Mint = Color(0xFF7DFFC3)
 private val Cyan = Color(0xFF9BE7FF)
 private val Amber = Color(0xFFFFC56B)
+private val Alert = Color(0xFFFF5A4E)
 
 /**
- * Spatial AR Engine. Draws lane arrows, lane edges, lead-vehicle distances,
- * and sign markers. It does not choose a lane; [SpatialInstruction] already did.
+ * Spatial AR Engine: draws, every display frame, the [ArScene] built from the session's world (moved to
+ * display time), Driving Context and route. It decides nothing itself: arrows come from phase1's route
+ * via [com.drivingassist.spatialcopilot.ar.RouteArrows], the highlighted vehicle from the Driving Context.
+ * Clean view: road arrows and the lead-vehicle highlight only. Debug adds every box, lane lines, the
+ * fitted ego lane, anchors and the horizon.
  */
 @Composable
-fun SpatialArEngine(
-    instruction: SpatialInstruction,
-    modifier: Modifier = Modifier,
-) {
+fun SpatialArEngine(session: CopilotSession, debug: Boolean, modifier: Modifier = Modifier) {
     val textMeasurer = rememberTextMeasurer()
-    var pulse by remember { mutableFloatStateOf(0f) }
-    LaunchedEffect(Unit) {
-        val started = System.nanoTime()
-        while (true) {
-            pulse = ((System.nanoTime() - started) / 1_000_000_000.0).toFloat()
-            delay(32)
-        }
+    val builder = remember(session) { ArSceneBuilder() }
+    var frameNs by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(session) {
+        while (true) withFrameNanos { frameNs = it }
     }
 
     Canvas(modifier.fillMaxSize()) {
+        val t = frameNs / 1e9f // read every frame: the canvas redraws at display rate
         drawRect(
             brush = Brush.verticalGradient(
                 0f to Color.Black.copy(alpha = 0.28f),
                 0.18f to Color.Transparent,
                 0.72f to Color.Transparent,
-                1f to Color.Black.copy(alpha = 0.45f),
+                1f to Color.Black.copy(alpha = 0.40f),
             ),
         )
-        val map = Mapper(instruction.imageWidth, instruction.imageHeight, size.width, size.height)
-        instruction.lanes.forEach { lane ->
-            if (lane.recommended) drawLaneFill(lane, map)
-        }
-        instruction.lanes.forEachIndexed { index, lane ->
-            drawLaneEdges(lane, map, last = index == instruction.lanes.lastIndex)
-        }
-        instruction.lanes.forEach { lane ->
-            val anchor = map.point(lane.arrow.anchorX, lane.arrow.anchorY)
-            drawLaneArrow(
-                anchor = anchor,
-                heading = lane.arrow.heading,
-                highlighted = lane.arrow.highlighted,
-                time = pulse,
-            )
-        }
-        instruction.signs.forEach { sign ->
-            drawSign(sign.label, sign.box, map, textMeasurer)
-        }
-        instruction.vehicles.forEach { vehicle ->
-            val label = vehicle.distanceLabel ?: return@forEach
-            drawVehicle(vehicle.box, label, map, textMeasurer, pulse)
-        }
-    }
-}
-
-private class Mapper(
-    private val imageWidth: Int,
-    private val imageHeight: Int,
-    private val viewWidth: Float,
-    private val viewHeight: Float,
-) {
-    private val scale: Float = if (imageWidth <= 0 || imageHeight <= 0) {
-        1f
-    } else {
-        max(viewWidth / imageWidth, viewHeight / imageHeight)
-    }
-    private val dx: Float = (viewWidth - imageWidth * scale) / 2f
-    private val dy: Float = (viewHeight - imageHeight * scale) / 2f
-
-    fun point(x: Float, y: Float): Offset = Offset(dx + x * scale, dy + y * scale)
-
-    fun point(px: Px): Offset = point(px.x, px.y)
-
-    fun box(box: ImageBox): OffsetRect = OffsetRect(point(box.x1, box.y1), point(box.x2, box.y2))
-}
-
-private data class OffsetRect(val topLeft: Offset, val bottomRight: Offset) {
-    val width: Float get() = bottomRight.x - topLeft.x
-    val height: Float get() = bottomRight.y - topLeft.y
-    val center: Offset get() = Offset((topLeft.x + bottomRight.x) / 2f, (topLeft.y + bottomRight.y) / 2f)
-}
-
-private fun DrawScope.drawLaneFill(lane: LaneSlot, map: Mapper) {
-    if (lane.boundaries.size < 2) return
-    val left = lane.boundaries[0].map(map::point)
-    val right = lane.boundaries[1].map(map::point)
-    if (left.size < 2 || right.size < 2) return
-    val rightPath = if (abs(left.first().y - right.first().y) < abs(left.first().y - right.last().y)) {
-        right.asReversed()
-    } else {
-        right
-    }
-    val path = Path().apply {
-        moveTo(left.first().x, left.first().y)
-        left.drop(1).forEach { lineTo(it.x, it.y) }
-        rightPath.forEach { lineTo(it.x, it.y) }
-        close()
-    }
-    drawPath(path, Mint.copy(alpha = 0.16f))
-}
-
-private fun DrawScope.drawLaneEdges(lane: LaneSlot, map: Mapper, last: Boolean) {
-    val color = if (lane.recommended) Mint.copy(alpha = 0.95f) else Color.White.copy(alpha = 0.55f)
-    val width = if (lane.recommended) 3.5.dp.toPx() else 2.dp.toPx()
-    val edges = if (last) lane.boundaries else lane.boundaries.take(1)
-    edges.forEach { polyline ->
-        if (polyline.size < 2) return@forEach
-        val path = Path()
-        polyline.forEachIndexed { index, point ->
-            val mapped = map.point(point)
-            if (index == 0) path.moveTo(mapped.x, mapped.y) else path.lineTo(mapped.x, mapped.y)
-        }
-        drawPath(
-            path,
-            color,
-            style = Stroke(width = width, cap = StrokeCap.Round, join = StrokeJoin.Round),
+        val route = session.route.value
+        val input = ArInput(
+            world = session.displayWorld(),
+            context = session.context.value,
+            route = route,
+            routeDistanceMeters = session.routeDistanceNow(route),
+            debug = debug,
         )
+        val scene = builder.build(input, size.width, size.height, session.clockNs())
+        // DEMO has no camera picture: sketch the scripted road (lane lines, the car ahead) under the overlay.
+        if (session.settings.mode == SourceMode.DEMO) drawDemoSketch(input.world)
+        scene.debug?.let { drawDebug(it, textMeasurer) }
+        drawArrows(scene)
+        scene.lead?.let { drawLead(it, textMeasurer, t) }
     }
 }
 
-/**
- * Reusable road-plane lane arrow: three chevrons aimed along [heading].
- * Highlighted arrows are larger and pulse. Dim arrows stay on the other lanes.
- */
-private fun DrawScope.drawLaneArrow(
-    anchor: Offset,
-    heading: ArrowHeading,
-    highlighted: Boolean,
-    time: Float,
-) {
-    val direction = when (heading) {
-        ArrowHeading.LEFT -> Offset(-0.42f, -1f)
-        ArrowHeading.RIGHT -> Offset(0.42f, -1f)
-        ArrowHeading.STRAIGHT -> Offset(0f, -1f)
-    }.normalized()
-    val pulse = if (highlighted) 0.72f + 0.28f * ((sin(time * 3.4f) + 1f) * 0.5f) else 0.9f
-    val unit = if (highlighted) 28.dp.toPx() else 18.dp.toPx()
-    val color = if (highlighted) Mint.copy(alpha = pulse) else Color.White.copy(alpha = 0.42f)
-    if (highlighted) {
-        drawCircle(color = Mint.copy(alpha = 0.14f * pulse), radius = unit * 2.6f, center = anchor)
+private fun DrawScope.drawArrows(scene: ArScene) {
+    if (scene.ribbon.size >= 3 && scene.ribbonAlpha > 0.01f) {
+        val path = Path().apply {
+            moveTo(scene.ribbon[0].x, scene.ribbon[0].y)
+            for (i in 1 until scene.ribbon.size) lineTo(scene.ribbon[i].x, scene.ribbon[i].y)
+            close()
+        }
+        drawPath(path, Mint.copy(alpha = scene.ribbonAlpha))
     }
-    repeat(3) { index ->
-        val along = unit * (0.15f + index * 1.05f)
-        val center = Offset(
-            anchor.x + direction.x * along,
-            anchor.y + direction.y * along * 0.62f,
-        )
-        val chevronSize = unit * (1.05f - index * 0.14f)
-        drawChevron(center, direction, chevronSize, color.copy(alpha = color.alpha * (1f - index * 0.12f)))
+    scene.chevrons.forEach { c ->
+        val path = Path().apply {
+            moveTo(c.left.x, c.left.y)
+            lineTo(c.tip.x, c.tip.y)
+            lineTo(c.right.x, c.right.y)
+        }
+        // Dark under-stroke keeps the chevrons readable on bright road and sky.
+        drawPath(path, Color.Black.copy(alpha = 0.35f * c.alpha), style = Stroke(width = c.strokePx * 1.8f, cap = StrokeCap.Round, join = StrokeJoin.Round))
+        drawPath(path, Mint.copy(alpha = c.alpha), style = Stroke(width = c.strokePx, cap = StrokeCap.Round, join = StrokeJoin.Round))
+    }
+    scene.pin?.let { p ->
+        val r = 14.dp.toPx()
+        drawCircle(Mint.copy(alpha = 0.25f), radius = r * 2f, center = Offset(p.x, p.y))
+        drawCircle(Mint, radius = r * 0.6f, center = Offset(p.x, p.y))
     }
 }
 
-private fun DrawScope.drawChevron(
-    center: Offset,
-    direction: Offset,
-    size: Float,
-    color: Color,
-) {
-    val perpendicular = Offset(-direction.y, direction.x)
-    val tip = center + direction * size
-    val left = center - direction * (size * 0.2f) + perpendicular * size
-    val right = center - direction * (size * 0.2f) - perpendicular * size
-    val path = Path().apply {
-        moveTo(left.x, left.y)
-        lineTo(tip.x, tip.y)
-        lineTo(right.x, right.y)
-    }
-    drawPath(
-        path,
-        color,
-        style = Stroke(width = max(3.dp.toPx(), size * 0.16f), cap = StrokeCap.Round, join = StrokeJoin.Round),
-    )
-}
-
-private fun DrawScope.drawVehicle(
-    box: ImageBox,
-    label: String,
-    map: Mapper,
-    textMeasurer: androidx.compose.ui.text.TextMeasurer,
-    time: Float,
-) {
-    val rect = map.box(box)
+private fun DrawScope.drawLead(lead: LeadHighlight, textMeasurer: TextMeasurer, time: Float) {
+    val rect = lead.rect
     if (rect.width < 4f || rect.height < 4f) return
-    val pulse = 0.75f + 0.25f * ((sin(time * 3.2f) + 1f) * 0.5f)
-    val color = Cyan.copy(alpha = pulse)
+    val base = if (lead.critical) Alert else Amber
+    val pulse = if (lead.critical) 0.7f + 0.3f * ((sin(time * 6.0f) + 1f) * 0.5f) else 0.95f
+    val color = base.copy(alpha = pulse)
     val arm = min(rect.width, rect.height) * 0.28f
-    val stroke = 2.5.dp.toPx()
-    fun seg(x1: Float, y1: Float, x2: Float, y2: Float) {
-        drawLine(color, Offset(x1, y1), Offset(x2, y2), stroke, cap = StrokeCap.Round)
-    }
-    val l = rect.topLeft.x
-    val t = rect.topLeft.y
-    val r = rect.bottomRight.x
-    val b = rect.bottomRight.y
-    seg(l, t + arm, l, t)
-    seg(l, t, l + arm, t)
-    seg(r - arm, t, r, t)
-    seg(r, t, r, t + arm)
-    seg(r, b - arm, r, b)
-    seg(r, b, r - arm, b)
-    seg(l + arm, b, l, b)
-    seg(l, b, l, b - arm)
-    drawBadge(textMeasurer, label, Offset(rect.center.x, t - 8.dp.toPx()), color, centered = true)
+    val stroke = (if (lead.critical) 4.dp else 3.dp).toPx()
+    fun seg(x1: Float, y1: Float, x2: Float, y2: Float) = drawLine(color, Offset(x1, y1), Offset(x2, y2), stroke, cap = StrokeCap.Round)
+    val l = rect.left
+    val t = rect.top
+    val r = rect.right
+    val b = rect.bottom
+    seg(l, t + arm, l, t); seg(l, t, l + arm, t)
+    seg(r - arm, t, r, t); seg(r, t, r, t + arm)
+    seg(r, b - arm, r, b); seg(r, b, r - arm, b)
+    seg(l + arm, b, l, b); seg(l, b, l, b - arm)
+    val label = if (lead.critical) "TOO CLOSE · ${lead.label}" else lead.label
+    drawBadge(textMeasurer, label, Offset(rect.centerX, t - 8.dp.toPx()), color, centered = true, bold = lead.critical)
 }
 
-private fun DrawScope.drawSign(
-    label: String,
-    box: ImageBox,
-    map: Mapper,
-    textMeasurer: androidx.compose.ui.text.TextMeasurer,
-) {
-    val rect = map.box(box)
-    drawRoundRect(
-        color = Amber,
-        topLeft = rect.topLeft,
-        size = Size(rect.width, rect.height),
-        cornerRadius = CornerRadius(8.dp.toPx()),
-        style = Stroke(width = 2.dp.toPx()),
-    )
-    drawBadge(
-        textMeasurer,
-        label,
-        Offset(rect.topLeft.x, rect.topLeft.y - 6.dp.toPx()),
-        Amber,
-        centered = false,
-    )
+private fun DrawScope.drawDebug(d: DebugLayer, textMeasurer: TextMeasurer) {
+    d.horizonY?.let { y ->
+        drawLine(Color.White.copy(alpha = 0.35f), Offset(0f, y), Offset(size.width, y), 1.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 10f)))
+    }
+    d.laneLines.forEach { line -> polyline(line, Color.White.copy(alpha = 0.7f), 2.dp.toPx()) }
+    polyline(d.egoLane, Cyan.copy(alpha = 0.9f), 2.dp.toPx(), dashed = true)
+    d.anchors.forEach { drawCircle(Amber, radius = 4.dp.toPx(), center = Offset(it.x, it.y)) }
+    d.boxes.forEach { (r, tag) -> debugBox(r, tag, textMeasurer) }
+    d.egoLaneSource?.let { src ->
+        drawBadge(textMeasurer, "ego lane: ${src.name.lowercase()}", Offset(12.dp.toPx(), size.height - 60.dp.toPx()), Cyan, centered = false, bold = false)
+    }
+}
+
+private fun DrawScope.debugBox(r: ViewRect, tag: String, textMeasurer: TextMeasurer) {
+    drawRect(Cyan.copy(alpha = 0.8f), topLeft = Offset(r.left, r.top), size = Size(r.width, r.height), style = Stroke(width = 1.5.dp.toPx()))
+    drawBadge(textMeasurer, tag, Offset(r.left, r.top - 2.dp.toPx()), Cyan, centered = false, bold = false, small = true)
+}
+
+private fun DrawScope.polyline(points: List<Vec2>, color: Color, width: Float, dashed: Boolean = false) {
+    if (points.size < 2) return
+    val path = Path().apply {
+        moveTo(points[0].x, points[0].y)
+        for (i in 1 until points.size) lineTo(points[i].x, points[i].y)
+    }
+    drawPath(path, color, style = Stroke(width = width, cap = StrokeCap.Round, join = StrokeJoin.Round,
+        pathEffect = if (dashed) PathEffect.dashPathEffect(floatArrayOf(18f, 12f)) else null))
 }
 
 private fun DrawScope.drawBadge(
-    textMeasurer: androidx.compose.ui.text.TextMeasurer,
+    textMeasurer: TextMeasurer,
     text: String,
     anchor: Offset,
     color: Color,
     centered: Boolean,
+    bold: Boolean,
+    small: Boolean = false,
 ) {
     val layout = textMeasurer.measure(
         text = text,
-        style = TextStyle(color = color, fontSize = 14.sp, fontWeight = FontWeight.SemiBold),
+        style = TextStyle(color = color, fontSize = if (small) 11.sp else 16.sp, fontWeight = if (bold) FontWeight.Bold else FontWeight.SemiBold),
     )
-    val padX = 8.dp.toPx()
-    val padY = 4.dp.toPx()
+    val padX = (if (small) 5.dp else 9.dp).toPx()
+    val padY = (if (small) 2.dp else 5.dp).toPx()
     val width = layout.size.width + padX * 2
     val height = layout.size.height + padY * 2
-    val left = (if (centered) anchor.x - width / 2f else anchor.x).coerceIn(8f, size.width - width - 8f)
-    val top = (anchor.y - height).coerceIn(8f, size.height - height - 8f)
+    val left = (if (centered) anchor.x - width / 2f else anchor.x).coerceIn(8f, (size.width - width - 8f).coerceAtLeast(8f))
+    val top = (anchor.y - height).coerceIn(8f, (size.height - height - 8f).coerceAtLeast(8f))
     drawRoundRect(
-        color = Color.Black.copy(alpha = 0.55f),
+        color = Color.Black.copy(alpha = 0.6f),
         topLeft = Offset(left, top),
         size = Size(width, height),
         cornerRadius = CornerRadius(height / 2f),
@@ -294,8 +193,19 @@ private fun DrawScope.drawBadge(
     drawText(layout, topLeft = Offset(left + padX, top + padY))
 }
 
-private fun Offset.normalized(): Offset {
-    val length = hypot(x, y)
-    if (length < 1e-3f) return Offset(0f, -1f)
-    return Offset(x / length, y / length)
+private fun DrawScope.drawDemoSketch(world: WorldSnapshot) {
+    val image = world.image ?: return
+    val map = FillCenter(image.width, image.height, size.width, size.height)
+    world.lanes?.lanes?.laneBoundaries.orEmpty().forEachIndexed { i, line ->
+        val pts = line.filter { it.size >= 2 }.map { map.point(it[0], it[1]) }
+        val edge = i == 0 || i == world.lanes!!.lanes.laneBoundaries.lastIndex
+        polyline(pts, Color.White.copy(alpha = if (edge) 0.55f else 0.35f), (if (edge) 3.dp else 2.dp).toPx(), dashed = !edge)
+    }
+    world.objects.values.forEach { o ->
+        val r = map.box(o.bbox) ?: return@forEach
+        drawRoundRect(Color(0xFF3A4150), topLeft = Offset(r.left, r.top + r.height * 0.25f), size = Size(r.width, r.height * 0.75f), cornerRadius = CornerRadius(r.width * 0.08f))
+        drawRoundRect(Color(0xFF4B5466), topLeft = Offset(r.left + r.width * 0.15f, r.top), size = Size(r.width * 0.7f, r.height * 0.4f), cornerRadius = CornerRadius(r.width * 0.08f))
+        drawRect(Color(0xFFB3261E), topLeft = Offset(r.left + r.width * 0.06f, r.top + r.height * 0.45f), size = Size(r.width * 0.16f, r.height * 0.1f))
+        drawRect(Color(0xFFB3261E), topLeft = Offset(r.right - r.width * 0.22f, r.top + r.height * 0.45f), size = Size(r.width * 0.16f, r.height * 0.1f))
+    }
 }

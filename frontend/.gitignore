@@ -12,3 +12,4 @@ captures/
 *.ap_
 *.dex
 .DS_Store
+.kotlin/
