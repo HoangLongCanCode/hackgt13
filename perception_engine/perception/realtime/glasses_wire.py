@@ -45,6 +45,7 @@ MAX_BOUNDARY_POINTS = 6
 MAX_VEHICLES = 3
 MAX_SIGNS = 4
 MIN_BOX_SIDE = 0.005                          # normalized; smaller boxes are dropped
+MAX_JPEG_EDGE = 4096                          # SOF width / height above this is refused before decoding (phone: 640)
 FRONT_MIN_BOTTOM_Y = 0.4                      # "in front": box bottom below this row ...
 CORRIDOR_MARGIN = 0.06                        # ... and centre between the ego lines (widened by this) at that row
 NO_LANES_CORRIDOR = (0.25, 0.75)              # centre-x band used when there are no ego lines
@@ -103,6 +104,30 @@ def _b64decode(s: str) -> bytes:
         raise FrameError("data is not valid base64") from None
 
 
+def _jpeg_dims(raw: bytes) -> Optional[tuple[int, int]]:
+    """(width, height) from the first SOFn marker, or None when there is none before the scan data."""
+    i, n = 2, len(raw)
+    while i + 4 <= n:
+        if raw[i] != 0xFF:
+            return None
+        m = raw[i + 1]
+        if m == 0xFF:                         # fill byte
+            i += 1
+            continue
+        if m in (0x01, 0xD8) or 0xD0 <= m <= 0xD7:
+            i += 2
+            continue
+        seg = int.from_bytes(raw[i + 2:i + 4], "big")
+        if 0xC0 <= m <= 0xCF and m not in (0xC4, 0xC8, 0xCC):
+            if i + 9 > n:
+                return None
+            return int.from_bytes(raw[i + 7:i + 9], "big"), int.from_bytes(raw[i + 5:i + 7], "big")
+        if m == 0xDA or seg < 2:              # start of scan (no SOF before it) or a broken segment
+            return None
+        i += 2 + seg
+    return None
+
+
 def decode_frame(text: str) -> InboundFrame:
     """Parse one phone text frame and decode its JPEG. Raises FrameError with the reason to send back.
 
@@ -137,7 +162,13 @@ def decode_frame(text: str) -> InboundFrame:
         raise FrameError("jpeg exceeds 8MB")
     if raw[:3] != b"\xff\xd8\xff":
         raise FrameError("data is not a jpeg image")
-    img = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION)
+    dims = _jpeg_dims(raw)
+    if dims is not None and max(dims) > MAX_JPEG_EDGE:     # a 30 KB header can claim a 3 GB image
+        raise FrameError(f"jpeg larger than {MAX_JPEG_EDGE} px")
+    try:
+        img = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION)
+    except (cv2.error, MemoryError):       # e.g. OpenCV's pixel-count assertion on a crafted header
+        raise FrameError("data is not a jpeg image") from None
     if img is None or img.ndim != 3 or img.shape[2] != 3 or img.shape[0] < 1 or img.shape[1] < 1:
         raise FrameError("data is not a jpeg image")
     return InboundFrame(_int_or_none(msg.get("frameId")), _int_or_none(msg.get("timestampMs")), img)
@@ -200,7 +231,7 @@ def _norm_box(fm: FitMap, bbox: Sequence[float]) -> Optional[list[float]]:
     bx, by = fm.norm(bbox[2], bbox[3])
     x1, x2 = sorted((_c(ax), _c(bx)))
     y1, y2 = sorted((_c(ay), _c(by)))
-    if x2 - x1 < MIN_BOX_SIDE or y2 - y1 < MIN_BOX_SIDE:
+    if x2 - x1 < MIN_BOX_SIDE - 1e-9 or y2 - y1 < MIN_BOX_SIDE - 1e-9:     # 0.105 - 0.1 is 0.00499...
         return None
     return [x1, y1, x2, y2]
 
@@ -225,22 +256,85 @@ def _mean_x(line: Line) -> float:
     return sum(p[0] for p in line) / len(line)
 
 
-def _ego_pair(lines: list[Line], current_lane: int) -> tuple[Optional[Line], Optional[Line]]:
-    """The ego lane's boundaries: index currentLane - 1 and currentLane (LaneState lists laneCount + 1 lines, left to
-    right). When that pair does not exist: the rightmost line whose mean x is left of centre and the leftmost line
-    whose mean x is right of centre (either may be missing)."""
-    i, j = current_lane - 1, current_lane
-    if 0 <= i and j < len(lines) and lines[i] and lines[j]:
-        return lines[i], lines[j]
+def _ego_pair(lines: list[Line], ls: Optional[LaneState]) -> tuple[Optional[Line], Optional[Line]]:
+    """The ego lane's boundaries: laneBoundaries[currentLane - 1] and [currentLane], which assumes LaneState lists
+    laneCount + 1 lines, left to right. The lanes block often breaks that assumption (it also returns uncounted
+    chains, e.g. beyond a double yellow, and has no polyline for road edges or virtual boundaries: laneCount + 1 lines
+    in about 30 % of BDD frames), and then the index pair is a neighbouring lane. So the index pair counts as existing
+    only when the counts came from the lanes block, there are laneCount + 1 lines and the pair brackets the image
+    centre. Otherwise: the rightmost line whose mean x is left of centre and the leftmost line whose mean x is right
+    of centre (either may be missing)."""
+    cur = _int_or_none(getattr(ls, "currentLane", None))
+    cnt = _int_or_none(getattr(ls, "laneCount", None))
+    if cur is not None and cnt is not None and 1 <= cur <= cnt and len(lines) == cnt + 1:
+        left, right = lines[cur - 1], lines[cur]
+        if left and right and _mean_x(left) < 0.5 < _mean_x(right):
+            return left, right
     lefts = [ln for ln in lines if ln and _mean_x(ln) < 0.5]
     rights = [ln for ln in lines if ln and _mean_x(ln) > 0.5]
     return (max(lefts, key=_mean_x) if lefts else None), (min(rights, key=_mean_x) if rights else None)
 
 
+def _clip_segment(xa: float, ya: float, xb: float, yb: float) -> Optional[tuple[float, float]]:
+    """Liang-Barsky: (t0, t1) of the part of segment a->b inside the unit square, or None."""
+    dx, dy = xb - xa, yb - ya
+    t0, t1 = 0.0, 1.0
+    for p, q in ((-dx, xa), (dx, 1.0 - xa), (-dy, ya), (dy, 1.0 - ya)):
+        if p == 0.0:
+            if q < 0.0:
+                return None
+            continue
+        t = q / p
+        if p < 0.0:
+            if t > t1:
+                return None
+            t0 = max(t0, t)
+        else:
+            if t < t0:
+                return None
+            t1 = min(t1, t)
+    return t0, t1
+
+
+def _clip_line(line: Line) -> Line:
+    """The longest part of a polyline inside the image, cut where it crosses the border. Lane polylines are
+    extrapolated past the image sides (x -0.25..1.25 W); clamping each point would draw them down the screen edge."""
+    if len(line) == 1:
+        x, y = line[0]
+        return [line[0]] if 0.0 <= x <= 1.0 and 0.0 <= y <= 1.0 else []
+    runs: list[Line] = []
+    run: Line = []
+    for (xa, ya), (xb, yb) in zip(line, line[1:]):
+        c = _clip_segment(xa, ya, xb, yb)
+        if c is None:
+            if run:
+                runs.append(run)
+                run = []
+            continue
+        t0, t1 = c
+        p = (xa + t0 * (xb - xa), ya + t0 * (yb - ya))
+        q = (xa + t1 * (xb - xa), ya + t1 * (yb - ya))
+        if t0 > 0.0 or not run:               # enters from outside: a new run
+            if run:
+                runs.append(run)
+            run = [p]
+        run.append(q)
+        if t1 < 1.0:                          # leaves the image
+            runs.append(run)
+            run = []
+    if run:
+        runs.append(run)
+
+    def length(r: Line) -> float:
+        return sum(math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(r, r[1:]))
+    return max(runs, key=length) if runs else []
+
+
 def _display_points(line: Line) -> list[list[float]]:
-    """Clipped, rounded, consecutive duplicates removed, at most MAX_BOUNDARY_POINTS keeping the first and last."""
+    """The part inside the image, rounded, consecutive duplicates removed, at most MAX_BOUNDARY_POINTS keeping the
+    first and last."""
     pts: list[list[float]] = []
-    for x, y in line:
+    for x, y in _clip_line(line):
         p = [_c(x), _c(y)]
         if not pts or pts[-1] != p:
             pts.append(p)
@@ -280,7 +374,7 @@ def _vehicles(result: FrameResult, fm: FitMap, ego: tuple[Optional[Line], Option
         if cls not in VEHICLE_CLASSES:
             continue
         dist = dist_by_id.get(t.id)
-        if dist is None:
+        if dist is None or _r(dist.distanceMeters, 1) <= 0.0:     # would be sent as "0.0m"
             continue
         box = _norm_box(fm, t.bbox)
         if box is None:
@@ -364,7 +458,7 @@ def build_document(result: FrameResult, fitted: dict[str, Any], source_wh: tuple
     lines: list[Line] = []
     for raw in (result.lanes.laneBoundaries if result.lanes is not None else None) or []:
         lines.append([fm.norm(p[0], p[1]) for p in raw if len(p) >= 2 and _finite(p[0], p[1])])
-    ego = _ego_pair(lines, current_lane)
+    ego = _ego_pair(lines, result.lanes)
     boundaries = []
     for name, ln in zip(("left", "right"), ego):
         pts = _display_points(ln) if ln is not None else []
