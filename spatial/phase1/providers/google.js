@@ -18,6 +18,13 @@ const ROUTES_FIELD_MASK = [
   'routes.legs.steps.navigationInstruction',
 ].join(',');
 
+// Places API (New) Text Search for the tablet's destination search ("coffee", "Piedmont Park", an address). The
+// Geocoding API is the fallback when Places is not enabled for the key (it finds addresses, not "coffee").
+const PLACES_URL = 'https://places.googleapis.com/v1/places:searchText';
+const PLACES_FIELD_MASK = 'places.id,places.displayName,places.formattedAddress,places.location';
+const PLACES_MAX_RESULTS = 8;
+const PLACES_BIAS_RADIUS_METERS = 20000;
+
 function stripHtml(value) {
   return String(value || '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
 }
@@ -86,6 +93,73 @@ async function resolveDestination(query, config = {}) {
       lat: result.geometry.location.lat,
       lng: result.geometry.location.lng,
     },
+  });
+}
+
+/** Places matching free text, best first: [{placeId, label, address, location: {lat, lng}}]. config.near biases. */
+async function searchPlaces(query, config = {}) {
+  if (!config.apiKey) {
+    throw new Error('GOOGLE_MAPS_API_KEY is required for Google place search');
+  }
+  try {
+    return await searchPlacesText(query, config);
+  } catch (error) {
+    // 403 / 404: the Places API (New) is not enabled for this key's project; the Geocoding API may still be.
+    if (/HTTP (403|404)\b/.test(String(error && error.message))) {
+      process.stderr.write(`[phase1] Places API unavailable (${String(error.message).slice(0, 160)}); trying the Geocoding API\n`);
+      return searchPlacesGeocoding(query, config);
+    }
+    throw error;
+  }
+}
+
+async function searchPlacesText(query, config) {
+  const body = { textQuery: query, maxResultCount: PLACES_MAX_RESULTS };
+  if (config.near) {
+    body.locationBias = {
+      circle: {
+        center: { latitude: config.near.lat, longitude: config.near.lng },
+        radius: PLACES_BIAS_RADIUS_METERS,
+      },
+    };
+  }
+  const response = await postJson(PLACES_URL, body, {
+    'X-Goog-Api-Key': config.apiKey,
+    'X-Goog-FieldMask': PLACES_FIELD_MASK,
+  });
+  // No match = an empty object (no "places" array).
+  return ((response && response.places) || [])
+    .filter((place) => place.location)
+    .slice(0, PLACES_MAX_RESULTS)
+    .map((place) => ({
+      placeId: place.id || null,
+      label: (place.displayName && place.displayName.text) || place.formattedAddress || query,
+      address: place.formattedAddress || null,
+      location: { lat: place.location.latitude, lng: place.location.longitude },
+    }));
+}
+
+async function searchPlacesGeocoding(query, config) {
+  const url = new URL('https://maps.googleapis.com/maps/api/geocode/json');
+  url.searchParams.set('address', query);
+  url.searchParams.set('key', config.apiKey);
+
+  const response = await getJson(url.toString());
+  if (response.status === 'ZERO_RESULTS') return [];
+  if (response.status !== 'OK' || !response.results) {
+    const why = [response.status, response.error_message].filter(Boolean).join(': ');
+    throw new Error(`Unable to search places for: ${query}${why ? ` (${why})` : ''}`);
+  }
+  return response.results.slice(0, PLACES_MAX_RESULTS).map((result) => {
+    // "Piedmont Park" -> its name; an address starts with the street number -> the whole formatted address.
+    const first = (result.address_components || [])[0];
+    const named = first && first.long_name && !(first.types || []).includes('street_number');
+    return {
+      placeId: result.place_id || null,
+      label: named ? first.long_name : result.formatted_address || query,
+      address: result.formatted_address || null,
+      location: { lat: result.geometry.location.lat, lng: result.geometry.location.lng },
+    };
   });
 }
 
@@ -229,6 +303,7 @@ function normalizeSteps(steps, destinationLabel, read) {
 
 module.exports = {
   resolveDestination,
+  searchPlaces,
   fetchRoute,
   // exported for tests
   normalizeManeuver,

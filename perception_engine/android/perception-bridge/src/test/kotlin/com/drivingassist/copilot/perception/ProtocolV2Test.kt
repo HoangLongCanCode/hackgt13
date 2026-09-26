@@ -177,6 +177,43 @@ class ProtocolV2Test {
     // ---------------------------------------------------------------------------- navigation
 
     @Test
+    fun `place search, its answer and a picked destination match the protocol samples`() {
+        val search = ClientPlaceSearch("s1", "coffee", GeoPoint(33.7756, -84.3963))
+        assertEquals(rawJson.parseToJsonElement(bundled("client_place_search.json").readText()), rawJson.parseToJsonElement(PerceptionCodec.encodeClient(search)))
+        assertEquals(search, PerceptionCodec.decodeClient(bundled("client_place_search.json").readText()))
+        assertEquals("""{"type":"client.place_search","requestId":"s2","query":"tea","near":null}""",
+            PerceptionCodec.encodeClient(ClientPlaceSearch("s2", "tea")), "no GPS fix yet: near is null")
+
+        val picked = ClientDestination("Foxtail Coffee - Society Atlanta", "ChIJexample1", GeoPoint(33.7766, -84.3838))
+        assertEquals(rawJson.parseToJsonElement(bundled("client_destination_place.json").readText()), rawJson.parseToJsonElement(PerceptionCodec.encodeClient(picked)))
+        assertEquals(picked, PerceptionCodec.decodeClient(bundled("client_destination_place.json").readText()))
+        assertEquals(ClientDestination("Piedmont Park, Atlanta"), PerceptionCodec.decodeClient("""{"type":"client.destination","query":"Piedmont Park, Atlanta"}"""))
+
+        val text = bundled("navigation_places.json").readText()
+        val places = assertIs<NavigationPlacesMessage>(PerceptionCodec.decode(text))
+        assertEquals("s1", places.requestId)
+        assertEquals("coffee", places.query)
+        assertEquals("google", places.provider)
+        assertNull(places.error)
+        assertEquals(
+            PlaceResult("ChIJexample1", "Foxtail Coffee - Society Atlanta", "811 Peachtree St NE Unit 5, Atlanta, GA 30308, USA", GeoPoint(33.7766, -84.3838), 1162.0),
+            places.places.first(),
+        )
+        assertEquals(listOf("Foxtail Coffee - Society Atlanta", "Urban Grind"), places.places.map { it.label })
+        assertEquals(places, PerceptionCodec.decode(PerceptionCodec.encode(places)))
+
+        val failed = assertIs<NavigationPlacesMessage>(PerceptionCodec.decode(
+            """{"type":"navigation.places","schemaVersion":2,"serverTimeMs":1,"requestId":"s3","query":"x","provider":"mock","places":[],"error":"rate limited"}""",
+        ))
+        assertEquals("rate limited", failed.error)
+        assertTrue(failed.places.isEmpty())
+        val bare = assertIs<NavigationPlacesMessage>(PerceptionCodec.decode(
+            """{"type":"navigation.places","requestId":"s4","places":[{"label":"Somewhere","location":{"lat":1.0,"lng":2.0}}]}""",
+        ))
+        assertEquals(PlaceResult(label = "Somewhere", location = GeoPoint(1.0, 2.0)), bare.places.single(), "optional place fields default to null")
+    }
+
+    @Test
     fun `navigation packet decodes routeState and keeps the phase1 packet verbatim`() {
         val text = bundled("navigation_packet_sim.json").readText()
         val m = assertIs<NavigationPacketMessage>(PerceptionCodec.decode(text))

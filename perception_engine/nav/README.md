@@ -24,7 +24,7 @@ Part of the AI Spatial Driving Copilot. The navigation engine ("phase1", Node.js
 | `demo_sessions/<clip>/` | `session_manifest.json`, `route.json`, `trip_state.jsonl` (small JSON, committed; **no video inside**). |
 | `../perception/realtime/nav_relay.py` | Python `NavRelay`: the server's interface to the child. |
 | `../tests/test_nav_relay.py` | Tests (plain Python). |
-| `../contracts/schemas/navigation.packet.schema.json`, `client.trip_state.schema.json` | JSON Schemas (2020-12) of the two navigation messages. |
+| `../contracts/schemas/navigation.packet.schema.json`, `client.trip_state.schema.json`, `client.destination.schema.json`, `client.place_search.schema.json`, `navigation.places.schema.json` | JSON Schemas (2020-12) of the navigation messages. |
 
 ## How phase1 plugs in
 
@@ -61,6 +61,8 @@ Source of truth: [`contracts/PROTOCOL_v2.md`](../contracts/PROTOCOL_v2.md) → *
 - `packet` is phase1's `SpatialNavigationPacket`, unchanged. Fields phase1 leaves undefined are absent.
 - **sim**: media time `t` → trip time `trip_state[0].timestampMs + 1000·t`, and the packet is built from the samples up to that time. Seeking works because the timeline has no hidden state. Optional manifest extension `videoStartTimestampMs`: when present, it replaces `trip_state[0].timestampMs` (for real sessions where the video started before or after the GPS log).
 - **live**: each `client.trip_state` (the body is a phase1 `trip_state.jsonl` line plus `"type"`) is answered with one packet. `ptsSeconds` is `null`, and `tripTimestampMs` is the newest sample's timestamp. Missing `heading` / `speedMps` count as 0, as the android-collector does. A sample more than 60 s older than the newest one starts a new history (client clock reset).
+- **destination search** (live): `client.place_search` `{requestId, query, near}` is answered to that client only with one `navigation.places` (at most 8 places, best first, `distanceMeters` from `near`; on failure `places: []` and `error`, never a key; at most 2 searches per second per client, the rest get `error: "rate limited"`). The phase1 provider does the search: Google = Places API (New) Text Search, falling back to the Geocoding API when Places is not enabled for the key; mock = three made-up places near `near`. The Google key stays on the laptop.
+- **destination**: `client.destination` `{query}` is geocoded by the provider as before. With `location` (and `placeId`), as sent when the driver picks a search result, the route goes to exactly that point and `query` is only the label (echoed in `perception.hello` `navigation.destination`). Either way the route is built from the next `client.trip_state`.
 
 ## Child-process protocol (`phase1_relay.js`)
 
@@ -69,10 +71,11 @@ One JSON object per line. Requests are handled strictly in order:
 | Request | Reply |
 |---|---|
 | `{"id":1,"op":"start_sim","sessionDir":"<abs path>"}` | `{"id":1,"ok":true,"info":{"sessionId","videoFile","videoId","samples","t0Ms","durationSeconds","route":{...}}}` |
-| `{"id":2,"op":"start_live","routeJson":"<route.json>"}` or `"route":{...}` or `"destination":"<query>"[,"origin":"<query or lat,lng>"][,"provider":"mock"\|"google"]` | `{"id":2,"ok":true,"info":{"routeReady",...},"route":{...}}` |
+| `{"id":2,"op":"start_live","routeJson":"<route.json>"}` or `"route":{...}` or `"destination":"<query>"` or `"destinationPlace":{"label","placeId","coordinate":{"lat","lng"}}` (routed to as it is, no geocode) `[,"origin":"<query or lat,lng>"][,"provider":"mock"\|"google"]` | `{"id":2,"ok":true,"info":{"routeReady",...},"route":{...}}` |
 | `{"id":3,"op":"at_pts","ptsSeconds":12.3}` | `{"id":3,"ok":true,"message":{navigation.packet}}` |
 | `{"id":4,"op":"trip_state","sample":{client.trip_state body}}` | `{"id":4,"ok":true,"message":{...}[,"route":{...}]}` (`route` only when it was just built) |
-| `{"id":5,"op":"status"}` / `{"id":6,"op":"ping"}` / `{"id":7,"op":"close"}` | `{"id":N,"ok":true,"info"\|"message":...}` |
+| `{"id":5,"op":"search","query":"coffee","near":{"lat","lng"}\|null,"provider":"mock"\|"google"}` (any mode; does not touch the sim / live state) | `{"id":5,"ok":true,"places":[{"placeId","label","address","location":{"lat","lng"}}],"provider":"mock"}` (at most 8, best first) |
+| `{"id":6,"op":"status"}` / `{"id":7,"op":"ping"}` / `{"id":8,"op":"close"}` | `{"id":N,"ok":true,"info"\|"message":...}` |
 | anything that fails | `{"id":N,"ok":false,"error":"..."}` |
 
 At start-up the relay prints `{"id":null,"ok":true,"event":"ready","info":{"phase1Dir","phase1Layout","googleKeyConfigured",...}}` (or `"event":"fatal"` and exit code 2). It exits when its stdin closes, so it never outlives the server. `console.log` is redirected to stderr so stdout carries only the protocol. Try it by hand:
@@ -92,8 +95,13 @@ relay.start_sim("nav/demo_sessions/b1ff4656-0435391e")    # raises NavRelayError
 msg = relay.packet_at_pts(12.3)                            # dict | None
 relay.start_live(route_json=None, origin=None, destination="Georgia Tech", provider="mock")
 msg = relay.on_trip_state(trip_state_body)                 # dict | None
+places = relay.search("coffee", near={"lat": 33.7756, "lng": -84.3963}, provider="mock")   # list; raises NavRelayError
+relay.start_live(destination_place={"label": "Foxtail Coffee", "placeId": "ChIJ...",
+                                    "coordinate": {"lat": 33.7766, "lng": -84.3838}}, provider="mock")
 relay.status(); relay.close()                              # close() is idempotent; also a context manager
 ```
+
+- `search` works in any mode and raises `NavRelayError` (redacted message) on failure; it waits at most 10 s and is not retried. The server calls it from its `nav-worker` thread and turns the result into `navigation.places` (adding `distanceMeters`).
 
 - Thread-safe (internal lock) and **blocking**: call it from a worker thread, never from the asyncio loop. A request round trip takes ~0.1 ms (p95 < 0.4 ms).
 - `start_sim` can be called again at any time, for example when a `client.hello` names a different `sim.videoId`. The demo session folders are named after the clip, and `info["videoId"]` is returned.
@@ -158,7 +166,7 @@ cd perception_engine
 python tests/test_nav_relay.py [--phase1-dir <dir>] [-k <name filter>]
 ```
 
-The suite has 21 tests: setup errors (missing phase1 dir, missing node), both engine layouts (`spatial/` and legacy `src/phase1`) resolved the same way by Python and Node, sim packets at 93 positions (schema-valid, monotonic progress, pts → trip time, seek back), live from `route.json` / destination / destination + origin, bad inputs (no restart), crash between calls, crash during a request, hung child (timeout → restart), 8-thread concurrency, latency, close / orphan checks, and the golden samples matching the relay. Measured on the dev laptop (Windows 11, Node v24.19): `NavRelay()` start 53 ms; `packet_at_pts` p50 0.08 ms / p95 0.17 ms; `on_trip_state` p50 0.10 ms; crash → restart + restore + packet 55 ms; hung child → packet after 1.07 s (with a 1 s timeout); packet ≈ 2.1 KB on the mock route (Google routes add the polyline and more steps).
+The suite has 23 tests: setup errors (missing phase1 dir, missing node), both engine layouts (`spatial/` and legacy `src/phase1`) resolved the same way by Python and Node, sim packets at 93 positions (schema-valid, monotonic progress, pts → trip time, seek back), live from `route.json` / destination / destination + origin / a picked place (exact point, restored after a crash), destination search with the mock provider, bad inputs (no restart), crash between calls, crash during a request, hung child (timeout → restart), 8-thread concurrency, latency, close / orphan checks, and the golden samples matching the relay. Measured on the dev laptop (Windows 11, Node v24.19): `NavRelay()` start 53 ms; `packet_at_pts` p50 0.08 ms / p95 0.17 ms; `on_trip_state` p50 0.10 ms; crash → restart + restore + packet 55 ms; hung child → packet after 1.07 s (with a 1 s timeout); packet ≈ 2.1 KB on the mock route (Google routes add the polyline and more steps).
 
 ## phase1 behaviours worth knowing (not changed here)
 

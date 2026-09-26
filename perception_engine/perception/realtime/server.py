@@ -24,7 +24,8 @@ Threads (every model is owned by exactly one lane thread; nothing on the asyncio
                submitted straight from the loop into the 1-slot latest-wins inbox (a superseded frame is answered
                with perception.skip).
   * nav worker (optional): the phase1 route-engine relay (perception.realtime.nav_relay.NavRelay, a Node child
-               process) is only ever called from this thread -> navigation.packet.
+               process) is only ever called from this thread -> navigation.packet (broadcast) and navigation.places
+               (to the client whose client.place_search it answers).
 Lane threads hand serialised JSON to the loop with loop.call_soon_threadsafe. Each client has a reliable control
 queue (hello, skip, error, pong, stats) plus 1-slot latest-wins slots for perception.frame, perception.update and
 navigation.packet, so a slow socket only loses its own messages and never stalls inference. A wave-1 frame that
@@ -80,6 +81,8 @@ SEEK_THRESHOLD_S = 0.6            # client.playback jump (vs. extrapolation) tre
 PLAYBACK_STALE_S = 1.5            # stop extrapolating playback this long after the last client.playback
 NAV_PERIOD_S = 0.5                # sim/video: one navigation.packet per this much media time
 NAV_FAIL_THRESHOLD = 3            # consecutive relay calls without a packet -> navigation.available false
+PLACE_SEARCHES_PER_S = 2          # client.place_search answered per client per second (the rest: "rate limited")
+PLACES_MAX = 8                    # navigation.places lists at most this many places
 SEND_TIMEOUT_S = 10.0             # a send that cannot complete this long (peer stopped reading) evicts the client
 UNKNOWN_VIDEO_RETRY_S = 5.0       # a missing videoId is re-checked (rescan + error) at most this often per client
 
@@ -229,6 +232,7 @@ class Client:
         self.dropped_ctrl = 0
         self._err_last: dict[str, float] = {}
         self.nav_error_sent = False
+        self.search_times: deque[float] = deque(maxlen=PLACE_SEARCHES_PER_S)   # monotonic times of answered searches
         self.connected_at = time.time()
         self.live_camera: Optional[dict[str, Any]] = None    # validated camera of this client's last live hello
         self.unknown_videos: dict[str, float] = {}           # videoId -> monotonic time it was last reported missing
@@ -571,6 +575,28 @@ class SimSource(threading.Thread):
 
 
 # ----------------------------------------------------------------------------- navigation
+def haversine_m(a: dict[str, float], b: dict[str, float]) -> float:
+    """Great-circle distance in metres between two {lat, lng} points."""
+    la1, la2 = math.radians(a["lat"]), math.radians(b["lat"])
+    h = (math.sin((la2 - la1) / 2) ** 2
+         + math.cos(la1) * math.cos(la2) * math.sin(math.radians(b["lng"] - a["lng"]) / 2) ** 2)
+    return 2 * 6_371_000.0 * math.asin(min(1.0, math.sqrt(h)))
+
+
+def is_latlng(v: Any) -> bool:
+    def num(x: Any) -> bool:
+        return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+    return (isinstance(v, dict) and num(v.get("lat")) and num(v.get("lng"))
+            and -90 <= v["lat"] <= 90 and -180 <= v["lng"] <= 180)
+
+
+def make_places(request_id: str, query: str, provider: str, places: list[dict[str, Any]],
+                error: Optional[str]) -> dict[str, Any]:
+    """navigation.places: the answer to one client.place_search (PROTOCOL_v2 Navigation)."""
+    return {"type": "navigation.places", "schemaVersion": 2, "serverTimeMs": now_ms(), "requestId": request_id,
+            "query": query, "provider": provider, "places": places, "error": error}
+
+
 def load_nav_relay_class(spec: Optional[str]) -> tuple[Optional[type], Optional[str]]:
     """NavRelay from perception.realtime.nav_relay (written by the navigation side), or `module:Class` (tests)."""
     try:
@@ -587,6 +613,7 @@ class NavWorker(threading.Thread):
     """Owns the NavRelay (a Node child process speaking JSON lines). Every relay call happens in this thread.
     sim/video: one relay.packet_at_pts(current media pts) per ~0.5 s of playback (and after a seek);
     live: relay.on_trip_state(sample) for each client.trip_state. Results are broadcast as navigation.packet.
+    Destination search (client.place_search): relay.search(...) -> one navigation.places to the asking client only.
 
     Health: the relay's calls return None instead of raising when phase1 fails (NavRelay restarts a crashed child
     by itself). NAV_FAIL_THRESHOLD calls in a row without a packet set available=False with the reason, re-announce
@@ -608,18 +635,28 @@ class NavWorker(threading.Thread):
         self.packets = 0
         self.failures = 0                    # consecutive relay calls without a packet
         self.last_ms: Optional[float] = None
-        self.destination: Optional[str] = getattr(a, "nav_destination", None)  # live: current target query
-        self.pending_destination: Optional[str] = None   # live: set by client.destination, applied in run()
+        self.destination: Optional[str] = getattr(a, "nav_destination", None)  # live: current target query / label
+        # live: (query, picked place or None), set by client.destination, applied in run()
+        self.pending_destination: Optional[tuple[str, Optional[dict[str, Any]]]] = None
+        self.searches: deque[tuple[str, str, str, Optional[dict[str, float]]]] = deque(maxlen=16)  # key, id, q, near
 
     def info(self) -> dict[str, Any]:
         return {"mode": self.mode, "available": self.available, "error": self.error,
                 "destination": self.destination if self.mode == "live" else None}
 
-    def set_destination(self, query: str) -> None:
+    def set_destination(self, query: str, place: Optional[dict[str, Any]] = None) -> None:
         """Live: a new target from the tablet. The relay restarts live navigation with it (in run()); the route is
-        built by the phase1 provider (mock or Google) from the next client.trip_state position."""
+        built by the phase1 provider (mock or Google) from the next client.trip_state position. `place`
+        ({label, placeId, coordinate}, a result of client.place_search) is routed to exactly; else `query` is
+        geocoded."""
         with self.cond:
-            self.pending_destination = query
+            self.pending_destination = (query, place)
+            self.cond.notify()
+
+    def submit_search(self, client_key: str, request_id: str, query: str, near: Optional[dict[str, float]]) -> None:
+        """client.place_search (checked and rate-limited by the server): answered in run() to that client only."""
+        with self.cond:
+            self.searches.append((client_key, request_id, query, near))
             self.cond.notify()
 
     def submit_trip(self, sample: dict[str, Any], client_key: Optional[str]) -> None:
@@ -661,9 +698,12 @@ class NavWorker(threading.Thread):
             print(f"[nav] relay still failing ({self.failures} calls): {why}", flush=True)
         return None
 
-    def _apply_destination(self, query: str) -> None:
+    def _apply_destination(self, query: str, place: Optional[dict[str, Any]] = None) -> None:
         try:
-            self.relay.start_live(destination=query, provider=self.a.nav_provider)
+            if place is not None:                    # picked from navigation.places: that exact point, no geocode
+                self.relay.start_live(destination_place=place, provider=self.a.nav_provider)
+            else:
+                self.relay.start_live(destination=query, provider=self.a.nav_provider)
         except Exception as e:
             self.available = False
             self.error = f"destination {query!r} not usable: {type(e).__name__}: {e}"
@@ -674,8 +714,37 @@ class NavWorker(threading.Thread):
         self.destination = query
         self.error = None
         self.failures = 0
-        print(f"[nav] destination {query!r} ({self.a.nav_provider}); route from the next client.trip_state", flush=True)
+        print(f"[nav] destination {query!r} ({self.a.nav_provider}{', picked place' if place else ''}); route from "
+              f"the next client.trip_state", flush=True)
         self.srv.post(self.srv.broadcast_hello, False)
+
+    def _search(self, key: str, request_id: str, query: str, near: Optional[dict[str, float]]) -> None:
+        """relay.search -> one navigation.places (built here, sent on the loop to that client only). On failure
+        places is empty and error carries the relay's message (redacted: never a key)."""
+        provider = self.a.nav_provider
+        places: list[dict[str, Any]] = []
+        error: Optional[str] = None
+        try:
+            found = self.relay.search(query, near=near, provider=provider)
+        except Exception as e:
+            from perception.realtime.nav_relay import redact
+            error = redact(str(e) or type(e).__name__)[:300]
+            print(f"[nav] search {query!r} ({provider}) failed: {error}", flush=True)
+        else:
+            for p in found or []:
+                loc = p.get("location") if isinstance(p, dict) else None
+                if not is_latlng(loc) or not isinstance(p.get("label"), str):
+                    continue
+                places.append({"placeId": p["placeId"] if isinstance(p.get("placeId"), str) else None,
+                               "label": p["label"],
+                               "address": p["address"] if isinstance(p.get("address"), str) else None,
+                               "location": {"lat": float(loc["lat"]), "lng": float(loc["lng"])},
+                               "distanceMeters": round(haversine_m(near, loc), 1) if near else None})
+                if len(places) >= PLACES_MAX:
+                    break
+            print(f"[nav] search {query!r} ({provider}): {len(places)} places", flush=True)
+        msg = make_places(request_id, query, provider, places, error)
+        self.srv.post(self.srv.deliver_places, key, dumps(msg).decode())
 
     def _publish(self, pkt: dict[str, Any]) -> None:
         self.packets += 1
@@ -705,17 +774,21 @@ class NavWorker(threading.Thread):
         try:
             while not self.stop_evt.is_set():
                 with self.cond:
-                    if not self.trips and self.pending_destination is None:
+                    if not self.trips and self.pending_destination is None and not self.searches:
                         self.cond.wait(0.1)
                     trips = list(self.trips)
                     self.trips.clear()
+                    searches = list(self.searches)
+                    self.searches.clear()
                     dest, self.pending_destination = self.pending_destination, None
                 if dest is not None and self.mode == "live":
-                    self._apply_destination(dest)
+                    self._apply_destination(*dest)
                 for sample, _key in trips:
                     pkt = self._call(self.relay.on_trip_state, sample)
                     if pkt is not None:
                         self._publish(pkt)
+                for search in searches:                      # after the trips: a Google search may take ~1 s
+                    self._search(*search)
                 if self.mode == "sim":
                     pts = self.srv.media_pts_now()
                     if pts is None:
@@ -837,6 +910,12 @@ class Server:
         self.last_nav = data
         for c in list(self.clients.values()):
             c.offer_nav(data)
+
+    def deliver_places(self, key: str, data: str) -> None:
+        """navigation.places goes to the client that searched only (reliable control queue)."""
+        c = self.clients.get(key)
+        if c is not None:
+            c.offer_ctrl(data)
 
     def send_skip(self, c: Client, frame_id: int, reason: str) -> None:
         self.frames_skipped += 1
@@ -1167,6 +1246,8 @@ class Server:
             self.on_trip_state(c, msg)
         elif t == "client.destination":
             self.on_destination(c, msg)
+        elif t == "client.place_search":
+            self.on_place_search(c, msg)
         else:
             c.error("badMessage", f"unknown message type {t!r}", detail={"type": t})
 
@@ -1276,24 +1357,67 @@ class Server:
                 return None, f"{k} must be a number (0 when unknown)"
         return body, None
 
-    def on_destination(self, c: Client, msg: dict[str, Any]) -> None:
-        """Live navigation target typed on the tablet (a place or address; the phase1 provider geocodes it). Same
-        sender rule as client.trip_state."""
+    def _live_nav_sender(self, c: Client, what: str, does: str) -> bool:
+        """client.destination / client.place_search: live navigation must be running (else one modeNotAvailable)
+        and the sender must be the controller or a client whose hello asked for live navigation (notUplinkClient)."""
         if self.nav is None or not self.nav.running or self.nav.mode != "live":
-            c.error("modeNotAvailable", "client.destination ignored: live navigation is not running (start the server "
+            c.error("modeNotAvailable", f"{what} ignored: live navigation is not running (start the server "
                                         "with --nav-live, --nav-destination or --nav-route)", min_interval_s=0)
-            return
+            return False
         hint = (c.hello or {}).get("navigation")
         if self.session.controller != c.key and not (isinstance(hint, dict) and hint.get("mode") == "live"):
-            c.error("notUplinkClient", "client.destination ignored: only the session controller (or a client whose "
-                                       "client.hello has navigation.mode 'live') sets the destination")
+            c.error("notUplinkClient", f"{what} ignored: only the session controller (or a client whose "
+                                       f"client.hello has navigation.mode 'live') {does}")
+            return False
+        return True
+
+    def on_destination(self, c: Client, msg: dict[str, Any]) -> None:
+        """Live navigation target from the tablet: a place or address the phase1 provider geocodes, or a place picked
+        from navigation.places (`location` + `placeId`): routed to exactly, `query` is only its label. Same sender
+        rule as client.trip_state."""
+        if not self._live_nav_sender(c, "client.destination", "sets the destination"):
             return
         q = msg.get("query")
         if not isinstance(q, str) or not q.strip() or len(q) > 200:
             c.error("badMessage", "client.destination ignored: query must be a non-empty string of at most 200 "
                                   "characters", detail={"type": "client.destination"})
             return
-        self.nav.set_destination(q.strip())
+        pid, loc = msg.get("placeId"), msg.get("location")
+        if (pid is not None and not (isinstance(pid, str) and len(pid) <= 256)) or (loc is not None
+                                                                                    and not is_latlng(loc)):
+            c.error("badMessage", "client.destination ignored: placeId must be a string of at most 256 characters "
+                                  "or null, location {lat, lng} in range or null", detail={"type": "client.destination"})
+            return
+        label = q.strip()
+        place = None if loc is None else {"label": label, "placeId": pid,
+                                          "coordinate": {"lat": float(loc["lat"]), "lng": float(loc["lng"])}}
+        self.nav.set_destination(label, place)
+
+    def on_place_search(self, c: Client, msg: dict[str, Any]) -> None:
+        """Destination search typed on the tablet: one navigation.places to this client only (the relay call runs in
+        the nav worker). Same checks as client.destination. At most PLACE_SEARCHES_PER_S searches per second per
+        client are answered by the provider; the others get places [] and error "rate limited" at once."""
+        if not self._live_nav_sender(c, "client.place_search", "searches destinations"):
+            return
+        rid, q, near = msg.get("requestId"), msg.get("query"), msg.get("near")
+        why = None
+        if not isinstance(rid, str) or not 1 <= len(rid) <= 64:
+            why = "requestId must be a string of 1-64 characters"
+        elif not isinstance(q, str) or not q.strip() or len(q) > 200:
+            why = "query must be a non-empty string of at most 200 characters"
+        elif near is not None and not is_latlng(near):
+            why = "near must be {lat, lng} in range or null"
+        if why:
+            c.error("badMessage", f"client.place_search ignored: {why}", detail={"type": "client.place_search"})
+            return
+        query = q.strip()
+        now = time.monotonic()
+        if len(c.search_times) == c.search_times.maxlen and now - c.search_times[0] < 1.0:
+            c.offer_ctrl(dumps(make_places(rid, query, self.a.nav_provider, [], "rate limited")).decode())
+            return
+        c.search_times.append(now)
+        self.nav.submit_search(c.key, rid, query,
+                               None if near is None else {"lat": float(near["lat"]), "lng": float(near["lng"])})
 
     def on_trip_state(self, c: Client, msg: dict[str, Any]) -> None:
         """Live navigation input. Only the session controller (or a client whose hello asked for live navigation)

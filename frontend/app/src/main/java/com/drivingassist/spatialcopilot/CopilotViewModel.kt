@@ -5,6 +5,8 @@ import android.content.Intent
 import android.os.SystemClock
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.drivingassist.copilot.perception.ClientDestination
+import com.drivingassist.copilot.perception.PlaceResult
 import com.drivingassist.spatialcopilot.session.AppSettings
 import com.drivingassist.spatialcopilot.session.CopilotSession
 import com.drivingassist.spatialcopilot.session.StatusModel
@@ -65,13 +67,28 @@ class CopilotViewModel(app: Application) : AndroidViewModel(app) {
             _session.value = newSession(next)
         } else {
             if (next.voice != previous.voice) voice.attach(_session.value, next)
-            if (next.destination != previous.destination) _session.value.setDestination(next.destination)
+            // A picked place is already sent by [goTo]: the session skips a target it already has.
+            _session.value.setDestination(next.destination, next.destinationPlaceId, next.destinationLocation)
         }
     }
 
     fun toggleDebug() = apply(_settings.value.copy(debug = !_settings.value.debug))
 
     fun reclaim() = _session.value.reclaim()
+
+    /** "Where to?" submit (LIVE): the laptop searches places around this tablet's GPS. */
+    fun search(query: String) = _session.value.search(query)
+
+    /**
+     * A search result was tapped: route there (sent with its exact location) and keep it as the destination
+     * (its label; the settings' Destination field shows it).
+     */
+    fun goTo(place: PlaceResult) {
+        val label = place.label.trim().take(ClientDestination.MAX_LENGTH)
+        if (label.isEmpty()) return
+        _session.value.goTo(label, place.placeId, place.location)
+        apply(_settings.value.copy(destination = label, destinationLocation = place.location, destinationPlaceId = place.placeId))
+    }
 
     override fun onCleared() {
         voice.close()

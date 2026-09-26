@@ -321,5 +321,39 @@ data class NavRouteState(
     val roadName: String? = null,
 )
 
+/**
+ * `navigation.places`: the laptop's answer to one `client.place_search` ([requestId] echoed), sent to the searching
+ * client only. At most 8 [places], best first. On failure [places] is empty and [error] says why ("rate limited",
+ * the provider's message; never a key). [provider] is "google" or "mock".
+ */
+@Serializable
+@SerialName(NavigationPlacesMessage.TYPE)
+data class NavigationPlacesMessage(
+    val schemaVersion: Int = 2,
+    val serverTimeMs: Long? = null,
+    val requestId: String? = null,
+    val query: String = "",
+    val provider: String? = null,
+    val places: List<PlaceResult> = emptyList(),
+    val error: String? = null,
+) : PerceptionMessage {
+    companion object {
+        const val TYPE = "navigation.places"
+    }
+}
+
+/** One `navigation.places` result; picked with `client.destination` (query = [label], plus [placeId] and [location]). */
+@Serializable
+data class PlaceResult(
+    val placeId: String? = null,
+    /** Display name, e.g. "Foxtail Coffee - Society Atlanta". */
+    val label: String,
+    /** Formatted address. */
+    val address: String? = null,
+    val location: GeoPoint,
+    /** Straight-line distance from the search's `near` (null without it). */
+    val distanceMeters: Double? = null,
+)
+
 /** A message whose `type` this client does not know. Returned, not thrown, so newer servers still work. */
 data class UnknownMessage(val type: String?, val raw: JsonObject) : PerceptionMessage

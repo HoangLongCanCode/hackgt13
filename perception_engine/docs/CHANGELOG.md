@@ -35,6 +35,11 @@ The parts built separately now run as one product on the Galaxy Tab S9.
 - **Cleanup.** `android/app-integration/` (glue for the deleted `driving_assist/` app) is retired: its camera encoder,
   GPS feeder, sim player and FILL_CENTER rule now live in `frontend/`. Docs no longer point at `driving_assist/`;
   `frontend/perception_api.md` is a pointer to `contracts/PROTOCOL_v2.md`.
+- **Search and navigate (later the same day).** phase1's Google provider uses the Routes API (legacy Directions as
+  fallback) and gains Places Text Search; the tablet's "Where to?" panel searches (`client.place_search` ->
+  `navigation.places`) and a picked place is routed to exactly (`client.destination` with `location`); server flag
+  `--nav-live`; a key-free heading-up route map drawn from the packet's route polyline. Checked with a real key on the
+  Tab S9: "coffee" -> 8 Google places -> a Google driving route to the picked one.
 - Tests: `:perception-bridge` 117, `:app` 18 (new), `tests/test_tts_proxy.py` 9/9 (new), protocol 11/11 (offline 7/7),
   ego path 3/3, nav relay 21/21. Run on the Tab S9 (Android 16): SIM, LIVE (with GPS -> phase1) and DEMO.
 

@@ -14,11 +14,14 @@
 //   {"id":1,"op":"start_sim","sessionDir":"<phase1 session folder>"}
 //   {"id":2,"op":"start_live","routeJson":"<route.json>"}                      (or "route": {...})
 //   {"id":2,"op":"start_live","destination":"<query>","origin":"<query|lat,lng>","provider":"mock|google"}
+//   {"id":2,"op":"start_live","destinationPlace":{"label":..,"placeId":..,"coordinate":{"lat":..,"lng":..}},"provider":..}
 //   {"id":3,"op":"at_pts","ptsSeconds":12.3}
 //   {"id":4,"op":"trip_state","sample":{"timestampMs":..,"location":{"lat":..,"lng":..},"heading":..,"speedMps":..}}
-//   {"id":5,"op":"status"} | {"id":6,"op":"ping"} | {"id":7,"op":"close"}
+//   {"id":5,"op":"search","query":"coffee","near":{"lat":..,"lng":..}|null,"provider":"mock|google"}
+//   {"id":6,"op":"status"} | {"id":7,"op":"ping"} | {"id":8,"op":"close"}
 // Replies: {"id":N,"ok":true,"message":{navigation.packet}} for at_pts / trip_state,
 //          {"id":N,"ok":true,"info":{...}[,"route":{...}]} for start_* / status / ping,
+//          {"id":N,"ok":true,"places":[{placeId,label,address,location}],"provider":".."} for search,
 //          {"id":N,"ok":false,"error":"..."} on failure.
 // On startup the relay prints {"id":null,"ok":true,"event":"ready","info":{...}} (or
 // {"id":null,"ok":false,"event":"fatal","error":"..."} and exits with code 2).
@@ -118,9 +121,19 @@ function main() {
             route: request.route,
             origin: request.origin,
             destination: request.destination,
+            destinationPlace: request.destinationPlace,
             provider: request.provider,
           });
           send({ id, ok: true, info: result.info, route: result.route || undefined });
+          break;
+        }
+        case 'search': {
+          const result = await relay.searchPlaces({
+            query: request.query,
+            near: request.near,
+            provider: request.provider,
+          });
+          send({ id, ok: true, places: result.places, provider: result.provider });
           break;
         }
         case 'at_pts': {

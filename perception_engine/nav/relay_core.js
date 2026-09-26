@@ -3,7 +3,7 @@
 //
 // Wraps the navigation engine ("phase1", on main under spatial/, folder spatial/phase1) WITHOUT
 // copying or modifying it: every route / progress / packet computation is a call into phase1's
-// own exports (loadPhase1Session, buildSpatialNavigationPacket, buildRouteSnapshot,
+// own exports (loadPhase1Session, buildSpatialNavigationPacket, buildRouteSnapshot, searchPlaces,
 // sampleRouteTripStates, validateRoute, computeRouteProgress, getLatestTripState).
 // This module only adds the timeline (sim: media time -> trip time), the live sample
 // history, and the `navigation.packet` envelope defined in contracts/PROTOCOL_v2.md.
@@ -25,6 +25,7 @@ const LIVE_HISTORY_MAX = 600; // samples kept in live mode (~10 min at 1 Hz)
 const LIVE_CLOCK_RESET_MS = 60000; // a sample this much older than the newest one = client clock reset
 const ROUTE_RETRY_MS = 10000; // live: min delay between failed lazy route builds
 const SIM_CACHE_MAX = 512; // packets cached per sim session (keyed by sample count)
+const SEARCH_MAX_PLACES = 8; // navigation.places lists at most this many
 
 // The navigation engine in either layout. Returns { root, src, layout } or null.
 //   spatial (main):  <root>/phase1/index.js      e.g. <repo>/spatial
@@ -152,6 +153,8 @@ function loadPhase1(phase1Dir) {
   if (missing.length > 0) {
     throw new Error(`phase1 at ${phase1Dir} does not export ${missing.join(', ')} (phase1 API changed?)`);
   }
+  // Optional (destination search, op "search"): an older engine without it still does everything else.
+  api.searchPlaces = typeof index.searchPlaces === 'function' ? index.searchPlaces : null;
   return api;
 }
 
@@ -184,6 +187,30 @@ function normalizeTripState(raw) {
     sample.accuracyMeters = raw.accuracyMeters;
   }
   return sample;
+}
+
+function isLatLng(value) {
+  return Boolean(value) && typeof value === 'object' && isFiniteNumber(value.lat) && isFiniteNumber(value.lng) &&
+    Math.abs(value.lat) <= 90 && Math.abs(value.lng) <= 180;
+}
+
+// A place picked on the tablet (client.destination with a location) -> the phase1 destination shape
+// {label, placeId, coordinate}. Throws on unusable input.
+function normalizePlace(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('destinationPlace must be an object {label, placeId, coordinate: {lat, lng}}');
+  }
+  if (typeof raw.label !== 'string' || !raw.label.trim()) {
+    throw new Error('destinationPlace.label must be a non-empty string');
+  }
+  if (!isLatLng(raw.coordinate)) {
+    throw new Error('destinationPlace.coordinate.lat / lng must be valid coordinates');
+  }
+  return {
+    label: raw.label.trim(),
+    placeId: typeof raw.placeId === 'string' && raw.placeId ? raw.placeId : null,
+    coordinate: { lat: raw.coordinate.lat, lng: raw.coordinate.lng },
+  };
 }
 
 // "33.7756,-84.3963" -> {lat, lng}; anything else -> null (treated as a place query).
@@ -343,11 +370,59 @@ function createNavRelay({ phase1Dir, clock = Date.now, log = () => {} } = {}) {
     return { message: envelope(built, round3(ptsSeconds), tripTimestampMs) };
   }
 
-  async function buildRoute({ origin, originQuery, destinationQuery, provider }) {
+  function providerOf(provider) {
+    const providerName = provider || 'mock';
+    if (!PROVIDERS.includes(providerName)) {
+      throw new Error(`unknown provider "${providerName}" (expected ${PROVIDERS.join(' | ')})`);
+    }
+    return providerName;
+  }
+
+  // Before a call that reaches the provider (geocode, route, search); a ready route.json needs no key.
+  function requireKey(providerName) {
+    if (providerName === 'google' && !process.env.GOOGLE_MAPS_API_KEY) {
+      throw new Error('provider "google" needs GOOGLE_MAPS_API_KEY (put it in the .env of the engine folder, e.g. spatial/.env, or in the environment)');
+    }
+  }
+
+  // Destination search (client.place_search): phase1's provider finds the places, this only checks the
+  // input and trims the answer to the navigation.places shape.
+  async function searchPlaces({ query, near, provider } = {}) {
+    const providerName = providerOf(provider);
+    requireKey(providerName);
+    if (typeof query !== 'string' || !query.trim() || query.length > 200) {
+      throw new Error('search needs query (a non-empty string of at most 200 characters)');
+    }
+    if (near != null && !isLatLng(near)) {
+      throw new Error('search near must be {lat, lng} (valid coordinates) or null');
+    }
+    if (!p1.searchPlaces) {
+      throw new Error('this phase1 engine has no searchPlaces export (bring spatial/ up to date with main)');
+    }
+    const found = await p1.searchPlaces({
+      query: query.trim(),
+      near: near ? { lat: near.lat, lng: near.lng } : null,
+      providerName,
+      providerOptions: { apiKey: process.env.GOOGLE_MAPS_API_KEY },
+    });
+    const places = (Array.isArray(found) ? found : [])
+      .filter((place) => place && isLatLng(place.location))
+      .slice(0, SEARCH_MAX_PLACES)
+      .map((place) => ({
+        placeId: typeof place.placeId === 'string' && place.placeId ? place.placeId : null,
+        label: String(place.label || place.address || query.trim()),
+        address: typeof place.address === 'string' ? place.address : null,
+        location: { lat: place.location.lat, lng: place.location.lng },
+      }));
+    return { places, provider: providerName };
+  }
+
+  async function buildRoute({ origin, originQuery, destinationQuery, destinationPlace, provider }) {
     const snapshot = await p1.buildRouteSnapshot({
       origin,
       originQuery,
       destinationQuery,
+      destinationPlace: destinationPlace || undefined,
       providerName: provider,
       // apiKey for google; origin makes the mock provider place its destination near the car.
       providerOptions: { apiKey: process.env.GOOGLE_MAPS_API_KEY, origin },
@@ -362,11 +437,8 @@ function createNavRelay({ phase1Dir, clock = Date.now, log = () => {} } = {}) {
     return route;
   }
 
-  async function startLive({ routeJson, route, origin, destination, provider } = {}) {
-    const providerName = provider || 'mock';
-    if (!PROVIDERS.includes(providerName)) {
-      throw new Error(`unknown provider "${providerName}" (expected ${PROVIDERS.join(' | ')})`);
-    }
+  async function startLive({ routeJson, route, origin, destination, destinationPlace, provider } = {}) {
+    const providerName = providerOf(provider);
     let liveRoute = null;
     let pending = null;
     if (route && typeof route === 'object') {
@@ -375,24 +447,25 @@ function createNavRelay({ phase1Dir, clock = Date.now, log = () => {} } = {}) {
       const file = path.resolve(routeJson);
       if (!fs.existsSync(file)) throw new Error(`route file not found: ${file}`);
       liveRoute = readJsonFile(file);
-    } else if (destination) {
-      if (providerName === 'google' && !process.env.GOOGLE_MAPS_API_KEY) {
-        throw new Error('provider "google" needs GOOGLE_MAPS_API_KEY (put it in the .env of the engine folder, e.g. spatial/.env, or in the environment)');
-      }
+    } else if (destination || destinationPlace) {
+      requireKey(providerName);
+      // A picked place is routed to exactly (no geocode of its label); a query is resolved by the provider.
+      const place = destinationPlace ? normalizePlace(destinationPlace) : null;
       if (origin) {
         const originCoord = parseLatLng(origin);
         liveRoute = await buildRoute({
           origin: originCoord || undefined,
           originQuery: originCoord ? undefined : origin,
           destinationQuery: destination,
+          destinationPlace: place,
           provider: providerName,
         });
       } else {
         // No origin: the route is built from the first client.trip_state position.
-        pending = { destination, provider: providerName };
+        pending = { destination: place ? place.label : destination, place, provider: providerName };
       }
     } else {
-      throw new Error('start_live needs routeJson, route or destination');
+      throw new Error('start_live needs routeJson, route, destination or destinationPlace');
     }
     if (liveRoute) p1.validateRoute(liveRoute);
     live = {
@@ -433,6 +506,7 @@ function createNavRelay({ phase1Dir, clock = Date.now, log = () => {} } = {}) {
         live.route = await buildRoute({
           origin: sample.location,
           destinationQuery: live.pending.destination,
+          destinationPlace: live.pending.place,
           provider: live.pending.provider,
         });
       } catch (error) {
@@ -459,7 +533,7 @@ function createNavRelay({ phase1Dir, clock = Date.now, log = () => {} } = {}) {
     return { mode: null };
   }
 
-  return { phase1: p1, startSim, atPts, startLive, tripState, status };
+  return { phase1: p1, startSim, atPts, startLive, tripState, searchPlaces, status };
 }
 
 module.exports = {
@@ -473,6 +547,7 @@ module.exports = {
   loadPhase1Env,
   loadPhase1,
   normalizeTripState,
+  normalizePlace,
   parseLatLng,
   toRouteState,
   createNavRelay,

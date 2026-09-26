@@ -140,7 +140,8 @@ cd perception_engine
 source .venv/Scripts/activate                               # Git Bash on Windows; Linux: source .venv/bin/activate
 python -m perception.realtime.server --mode sim  --nav-session nav/demo_sessions/b1ff4656-0435391e
 python -m perception.realtime.server --mode live --nav-route nav/demo_sessions/b1ff4656-0435391e/route.json
-python -m perception.realtime.server --mode auto --nav-live --nav-provider google   # the tablet sends the destination (client.destination)
+python -m perception.realtime.server --mode auto --nav-live --nav-provider google   # the tablet searches (client.place_search -> navigation.places) and sends the destination (client.destination)
+python -m perception.realtime.server --mode auto --nav-live --nav-provider google --no-tts   # same, voice from Android TTS only (ElevenLabs off)
 node ../spatial/scripts/test-google-provider.js              # Google provider offline (fake responses)
 node ../spatial/scripts/check-google-key.js "Piedmont Park, Atlanta"   # one real Geocoding + Routes call with spatial/.env
 python -m perception.realtime.nav_relay --nav-session nav/demo_sessions/b1ff4656-0435391e --pts 0 5 10 20   # relay alone

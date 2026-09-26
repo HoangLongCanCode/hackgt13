@@ -6,8 +6,10 @@ import com.drivingassist.copilot.context.Maneuver
 import com.drivingassist.copilot.context.NavigationState
 import com.drivingassist.copilot.perception.Camera
 import com.drivingassist.copilot.perception.ClientCamera
+import com.drivingassist.copilot.perception.ClientDestination
 import com.drivingassist.copilot.perception.ClientHello
 import com.drivingassist.copilot.perception.ClientPing
+import com.drivingassist.copilot.perception.ClientPlaceSearch
 import com.drivingassist.copilot.perception.ClientPlayback
 import com.drivingassist.copilot.perception.ClientTripState
 import com.drivingassist.copilot.perception.DeviceInfo
@@ -20,12 +22,14 @@ import com.drivingassist.copilot.perception.Lanes
 import com.drivingassist.copilot.perception.NavRouteState
 import com.drivingassist.copilot.perception.NavigationHint
 import com.drivingassist.copilot.perception.NavigationPacketMessage
+import com.drivingassist.copilot.perception.NavigationPlacesMessage
 import com.drivingassist.copilot.perception.ObjectClass
 import com.drivingassist.copilot.perception.PerceivedObject
 import com.drivingassist.copilot.perception.PerceptionCodec
 import com.drivingassist.copilot.perception.PerceptionFrame
 import com.drivingassist.copilot.perception.PerceptionMode
 import com.drivingassist.copilot.perception.PerceptionUpdate
+import com.drivingassist.copilot.perception.PlaceResult
 import com.drivingassist.copilot.perception.PongMessage
 import com.drivingassist.copilot.perception.SimInfo
 import com.drivingassist.copilot.perception.SkipMessage
@@ -362,6 +366,48 @@ class PerceptionBridgeTest {
         val t = assertIs<ClientTripState>(PerceptionCodec.decodeClient(texts.pollType("client.trip_state")!!))
         assertEquals(ClientTripState(1790000000123, GeoPoint(33.7756, -84.3963), 91.2, 6.1, 4.1), t)
         assertEquals(1L, b.link.await { it.tripStatesSent == 1L }.tripStatesSent)
+    }
+
+    @Test
+    fun `place search keeps only the newest answer and a picked place is sent with its location`() = runBlocking {
+        val serverWs = CompletableDeferred<WebSocket>()
+        enqueue(onOpen = { ws -> ws.send(helloJson("live-search", PerceptionMode.LIVE)); serverWs.complete(ws) })
+        val b = bridge()
+        assertNull(b.searchPlaces("coffee"), "not connected: nothing sent")
+        b.connect(liveHello.copy(navigation = NavigationHint.LIVE))
+        b.link.await { it.serverReady }
+        val ws = serverWs.await()
+        assertNull(b.searchPlaces("   "), "blank query")
+
+        val near = GeoPoint(33.7756, -84.3963)
+        val first = assertNotNull(b.searchPlaces("coffee", near))
+        val second = assertNotNull(b.searchPlaces(" tea "))
+        assertTrue(first != second)
+        assertEquals(ClientPlaceSearch(first, "coffee", near), PerceptionCodec.decodeClient(texts.pollType("client.place_search")!!))
+        assertEquals(ClientPlaceSearch(second, "tea", null), PerceptionCodec.decodeClient(texts.pollType("client.place_search")!!))
+        assertNull(b.places.value, "cleared while the newest search is pending")
+
+        fun answer(id: String, label: String) = PerceptionCodec.encode(
+            NavigationPlacesMessage(serverTimeMs = System.currentTimeMillis(), requestId = id, query = label, provider = "mock",
+                places = listOf(PlaceResult("mock-$label", label, "1 Test St", GeoPoint(33.78, -84.39), 900.0))),
+        )
+        // The answer to the older search comes late (after or before the newest): never shown.
+        ws.send(answer(first, "Old Coffee"))
+        ws.send(answer(second, "Tea House"))
+        assertEquals("Tea House", b.places.await { it != null }!!.places.single().label)
+        ws.send(answer(first, "Old Coffee"))
+        ws.send(navJson("GO_STRAIGHT", 10.0)) // processed after the answer on the socket thread
+        b.link.await { it.navigationPackets == 1L }
+        assertEquals(second, b.places.value!!.requestId)
+
+        val place = b.places.value!!.places.single()
+        assertTrue(b.sendDestination(place.label, place.placeId, place.location))
+        assertEquals(
+            ClientDestination("Tea House", "mock-Tea House", GeoPoint(33.78, -84.39)),
+            PerceptionCodec.decodeClient(texts.pollType("client.destination")!!),
+        )
+        assertTrue(b.sendDestination("Piedmont Park, Atlanta"))
+        assertEquals("""{"type":"client.destination","query":"Piedmont Park, Atlanta"}""", texts.pollType("client.destination"), "typed: query only")
     }
 
     @Test

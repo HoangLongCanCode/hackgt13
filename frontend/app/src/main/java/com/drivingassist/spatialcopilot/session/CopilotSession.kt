@@ -16,9 +16,13 @@ import com.drivingassist.copilot.context.DrivingEvent
 import com.drivingassist.copilot.context.Units
 import com.drivingassist.copilot.context.WorldSnapshot
 import com.drivingassist.copilot.perception.ClientCamera
+import com.drivingassist.copilot.perception.ClientDestination
 import com.drivingassist.copilot.perception.ClientHello
 import com.drivingassist.copilot.perception.DeviceInfo
+import com.drivingassist.copilot.perception.GeoPoint
 import com.drivingassist.copilot.perception.NavigationHint
+import com.drivingassist.copilot.perception.NavigationPlacesMessage
+import com.drivingassist.copilot.perception.PlaceResult
 import com.drivingassist.spatialcopilot.nav.DemoDrive
 import com.drivingassist.spatialcopilot.nav.RouteGuide
 import kotlinx.coroutines.CoroutineExceptionHandler
@@ -32,9 +36,40 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.Locale
+
+/**
+ * LIVE "Where to?" search as the panel shows it. [pending]: sent, no answer yet. [error]: the laptop's (e.g.
+ * "rate limited", a provider failure) or the tablet's (not connected, no answer, no live navigation).
+ */
+data class PlaceSearchState(
+    val query: String = "",
+    /** The search's `client.place_search` requestId; null when nothing was sent. */
+    val requestId: String? = null,
+    val pending: Boolean = false,
+    val places: List<PlaceResult> = emptyList(),
+    /** "google" | "mock", from the answer. */
+    val provider: String? = null,
+    val error: String? = null,
+) {
+    /** Applies the laptop's `navigation.places` when it answers this search (anything else is ignored). */
+    fun withAnswer(answer: NavigationPlacesMessage?): PlaceSearchState =
+        if (answer == null || requestId == null || answer.requestId != requestId) this
+        else copy(pending = false, places = answer.places, provider = answer.provider, error = answer.error?.takeIf { it.isNotBlank() })
+
+    /** Still no answer to search [id] (the laptop dropped it, or the link went down meanwhile). */
+    fun timedOut(id: String): PlaceSearchState =
+        if (requestId == id && pending) copy(pending = false, error = NO_ANSWER) else this
+
+    companion object {
+        const val NO_LIVE_NAVIGATION = "Start the laptop with --nav-live"
+        const val NOT_CONNECTED = "Laptop not connected."
+        const val NO_ANSWER = "No answer from the laptop. Try again."
+    }
+}
 
 /**
  * One run of the copilot with fixed [settings] (a settings change builds a new session). Owns the single
@@ -97,6 +132,12 @@ class CopilotSession(context: Context, val settings: AppSettings) : AutoCloseabl
     /** LIVE: false when no location provider / permission, true once updates were requested, null before. */
     val gpsAvailable: StateFlow<Boolean?> = _gpsAvailable.asStateFlow()
 
+    private val _placeSearch = MutableStateFlow(PlaceSearchState())
+
+    /** LIVE: the "Where to?" search (query, pending, the laptop's places or an error). */
+    val placeSearch: StateFlow<PlaceSearchState> = _placeSearch.asStateFlow()
+    private var searchTimeout: Job? = null
+
     private val device = DeviceInfo(Build.MANUFACTURER, Build.MODEL, Build.VERSION.RELEASE)
     private val clientId = "tablet-" + Build.MODEL.lowercase(Locale.ROOT).replace(Regex("[^a-z0-9]+"), "-").trim('-')
     private val startedNs = clockNs()
@@ -117,15 +158,17 @@ class CopilotSession(context: Context, val settings: AppSettings) : AutoCloseabl
         bridge?.let { b -> scope.launch { b.navigation.collect { _route.value = RouteGuide.from(it) } } }
         if (settings.mode == SourceMode.LIVE) bridge?.let { b ->
             // Tell the laptop where to go when its live target differs from ours (it keeps it across reconnects).
+            // The laptop echoes a picked place's label, so a picked place is not re-sent as a plain query.
             scope.launch {
                 kotlinx.coroutines.flow.combine(b.serverHello, destination) { hello, want -> hello to want }.collect { (hello, want) ->
-                    val dest = want.trim()
+                    val dest = want.query.trim()
                     if (hello == null || dest.isEmpty() || hello.navigationMode != "live" || hello.isWatcher) return@collect
-                    if (hello.navigationDestination != dest && lastSentDestination != dest && b.sendDestination(dest)) {
+                    if (hello.navigationDestination != dest && lastSentDestination != dest && b.sendDestination(dest, want.placeId, want.location)) {
                         lastSentDestination = dest
                     }
                 }
             }
+            scope.launch { b.places.collect { answer -> _placeSearch.update { it.withAnswer(answer) } } }
         }
     }
 
@@ -170,13 +213,60 @@ class CopilotSession(context: Context, val settings: AppSettings) : AutoCloseabl
         location = null
     }
 
-    private val destination = MutableStateFlow(settings.destination)
+    /** A navigation target: typed ([location] null: the laptop geocodes [query]) or a picked place (its label). */
+    private data class Destination(val query: String, val placeId: String? = null, val location: GeoPoint? = null)
+
+    private val destination = MutableStateFlow(Destination(settings.destination, settings.destinationPlaceId, settings.destinationLocation))
     @Volatile private var lastSentDestination: String? = null
 
     /** LIVE: a new navigation target from the settings (sent when the laptop's differs). */
-    fun setDestination(query: String) {
+    fun setDestination(query: String, placeId: String? = null, location: GeoPoint? = null) {
+        val next = Destination(query, placeId, location)
+        if (next == destination.value) return // e.g. the place [goTo] just sent, now saved in the settings
         lastSentDestination = null
-        destination.value = query
+        destination.value = next
+    }
+
+    /**
+     * LIVE "Where to?": searches places for [query] around the newest GPS fix; the laptop's answer lands in
+     * [placeSearch]. Call on submit. Without live navigation on the laptop nothing is sent and the state says so.
+     */
+    fun search(query: String) {
+        val q = query.trim().take(ClientDestination.MAX_LENGTH)
+        val b = bridge
+        if (q.isEmpty() || b == null || settings.mode != SourceMode.LIVE) return
+        searchTimeout?.cancel()
+        val hello = b.serverHello.value
+        if (hello != null && hello.navigationMode != "live") {
+            _placeSearch.value = PlaceSearchState(query = q, error = PlaceSearchState.NO_LIVE_NAVIGATION)
+            return
+        }
+        val id = b.searchPlaces(q, _gps.value?.let { GeoPoint(it.lat, it.lng) })
+        if (id == null) {
+            _placeSearch.value = PlaceSearchState(query = q, error = PlaceSearchState.NOT_CONNECTED)
+            return
+        }
+        _placeSearch.value = PlaceSearchState(query = q, requestId = id, pending = true)
+        _placeSearch.update { it.withAnswer(b.places.value) } // the answer may have come in before the line above
+        searchTimeout = scope.launch {
+            delay(SEARCH_TIMEOUT_MS)
+            _placeSearch.update { it.timedOut(id) }
+        }
+    }
+
+    /**
+     * LIVE: routes to a place picked from the search, sent right away with its exact [location] (the laptop does
+     * not geocode the label [query]), and kept as the target so it is sent again when the laptop's differs.
+     * Returns false when it could not be sent now (then it goes out with the next hello).
+     */
+    fun goTo(query: String, placeId: String?, location: GeoPoint): Boolean {
+        val target = Destination(query.trim().take(ClientDestination.MAX_LENGTH), placeId, location)
+        if (target.query.isEmpty()) return false
+        val sent = bridge?.sendDestination(target.query, target.placeId, target.location) == true
+        // Before the flow update, so the hello collector does not send it a second time.
+        lastSentDestination = if (sent) target.query else null
+        destination.value = target
+        return sent
     }
 
     /** Camera bind failures and the like (null clears). */
@@ -248,5 +338,6 @@ class CopilotSession(context: Context, val settings: AppSettings) : AutoCloseabl
     private companion object {
         const val TAG = "CopilotSession"
         const val SPEED_GATE_MPS = 1.5
+        const val SEARCH_TIMEOUT_MS = 10_000L
     }
 }

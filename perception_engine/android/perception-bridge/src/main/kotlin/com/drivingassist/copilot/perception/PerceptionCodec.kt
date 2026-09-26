@@ -34,6 +34,7 @@ object PerceptionCodec {
             subclass(PongMessage::class)
             subclass(ErrorMessage::class)
             subclass(NavigationPacketMessage::class)
+            subclass(NavigationPlacesMessage::class)
         }
     }
 
@@ -61,7 +62,7 @@ object PerceptionCodec {
 
     val knownTypes: Set<String> = setOf(
         PerceptionFrame.TYPE, PerceptionUpdate.TYPE, HelloMessage.TYPE, StatsMessage.TYPE, SkipMessage.TYPE, PongMessage.TYPE,
-        ErrorMessage.TYPE, NavigationPacketMessage.TYPE,
+        ErrorMessage.TYPE, NavigationPacketMessage.TYPE, NavigationPlacesMessage.TYPE,
     )
 
     /** Decode one server WebSocket text message. Throws [SerializationException] for a malformed known message. */
@@ -90,7 +91,10 @@ object PerceptionCodec {
 
     fun toJsonObject(message: PerceptionMessage): JsonObject = json.parseToJsonElement(encode(message)).jsonObject
 
-    /** Encode a tablet -> server message (`client.hello`, `client.playback`, `client.ping`, `client.trip_state`). */
+    /**
+     * Encode a tablet -> server message (`client.hello`, `client.playback`, `client.ping`, `client.trip_state`,
+     * `client.destination`, `client.place_search`).
+     */
     fun encodeClient(message: ClientMessage): String = clientJson.encodeToString(clientSerializer, message)
 
     /** Decode a tablet -> server message (test servers, sample files). */

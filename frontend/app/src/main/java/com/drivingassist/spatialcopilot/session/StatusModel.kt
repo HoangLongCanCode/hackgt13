@@ -87,7 +87,7 @@ object StatusModel {
         // Navigation health (phase1 on the laptop, fed by GPS in LIVE and by media time in SIM).
         val navLine = when {
             k.serverNavigationError?.contains("waiting for a destination") == true ->
-                if (settings.destination.isBlank()) "Live navigation is on: set a destination (tap the chip)." else "Sending the destination to the laptop..."
+                if (settings.destination.isBlank()) "Live navigation is on: tap Where to? to pick a destination." else "Sending the destination to the laptop..."
             k.serverNavigationAvailable == false || k.serverNavigationMode == "off" ->
                 "Route unavailable" + (k.serverNavigationError?.let { ": ${it.take(60)}" } ?: " (laptop runs no navigation)")
             route == null -> null

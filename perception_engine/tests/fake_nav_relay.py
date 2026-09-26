@@ -3,7 +3,9 @@ navigation wiring without Node.js / phase1 (the real relay is exercised by the e
 
 AI Spatial Driving Copilot. Same interface as NavRelay; every packet is the
 golden contracts/samples/v2/navigation.packet.sim_city.json sample with ptsSeconds / serverTimeMs / routeState
-distance replaced, so it validates against contracts/schemas/navigation.packet.schema.json. Start the server with
+distance replaced, so it validates against contracts/schemas/navigation.packet.schema.json. search() returns the
+places of contracts/samples/v2/navigation.places.json (a query "fail" raises, with a key in the message, to check
+the server's redaction). Start the server with
     python -m perception.realtime.server --mode auto --nav-session <dir> --nav-relay-impl tests.fake_nav_relay:FakeNavRelay
 """
 from __future__ import annotations
@@ -26,6 +28,8 @@ class FakeNavRelay:
         self.mode: Optional[str] = None
         p = SAMPLES / "navigation.packet.sim_city.json"
         self.template = json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+        p = SAMPLES / "navigation.places.json"
+        self.places = json.loads(p.read_text(encoding="utf-8"))["places"] if p.exists() else []
         self.t_thread: Optional[str] = None
 
     def _thread_check(self) -> None:
@@ -42,11 +46,25 @@ class FakeNavRelay:
             FakeNavRelay.calls.append(("start_sim", session_dir))
 
     def start_live(self, route_json: Optional[str] = None, origin: Optional[str] = None,
-                   destination: Optional[str] = None, provider: str = "mock") -> None:
+                   destination: Optional[str] = None, provider: str = "mock",
+                   destination_place: Optional[dict] = None) -> None:
         with self.lock:
             self._thread_check()
             self.mode = "live"
-            FakeNavRelay.calls.append(("start_live", destination or route_json))
+            if destination_place is not None:
+                FakeNavRelay.calls.append(("start_live_place", destination_place))
+            else:
+                FakeNavRelay.calls.append(("start_live", destination or route_json))
+
+    def search(self, query: str, near: Optional[dict] = None, provider: str = "mock") -> list[dict]:
+        with self.lock:
+            self._thread_check()
+            FakeNavRelay.calls.append(("search", query))
+            if query == "fail":
+                raise RuntimeError("search failed: HTTP 500 from https://maps.googleapis.com/maps/api/geocode/json"
+                                   "?address=fail&key=SECRET_TEST_KEY")
+            # the relay's shape: no distanceMeters (the server adds it)
+            return [{k: v for k, v in p.items() if k != "distanceMeters"} for p in copy.deepcopy(self.places)]
 
     def _packet(self, pts: Optional[float], trip_ms: int) -> Optional[dict]:
         if self.template is None:

@@ -18,10 +18,13 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-/** The newest location fix as the UI needs it (degraded-nav banner, optional speed gate). */
+/** The newest location fix as the UI needs it (degraded-nav banner, optional speed gate, place search bias). */
 data class GpsFix(
     /** SystemClock.elapsedRealtime() when the fix arrived. */
     val receivedAtMs: Long,
+    /** Degrees (WGS84), `Location.latitude` / `longitude`. */
+    val lat: Double,
+    val lng: Double,
     val accuracyMeters: Double?,
     val speedMps: Double?,
     val provider: String,
@@ -104,6 +107,8 @@ class LocationFeeder(private val context: Context, private val bridge: Perceptio
         val now = SystemClock.elapsedRealtime()
         _fix.value = GpsFix(
             receivedAtMs = now,
+            lat = loc.latitude,
+            lng = loc.longitude,
             accuracyMeters = if (loc.hasAccuracy()) loc.accuracy.toDouble() else null,
             speedMps = if (loc.hasSpeed()) loc.speed.toDouble() else null,
             provider = loc.provider ?: provider ?: "?",

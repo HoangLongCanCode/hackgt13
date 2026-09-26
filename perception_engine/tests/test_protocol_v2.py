@@ -10,7 +10,8 @@ AI Spatial Driving Copilot. Run from perception_engine/:
 Offline: every contracts/schemas/*.schema.json is a valid draft 2020-12 schema; every contracts/samples/v2/*.json
 validates against the schema of its `type`; the SDC1 header round-trips (and rejects bad input with the right skip
 reason); the wire builders produce schema-valid messages; the fast-lane geometry distance is sane; the NavWorker
-calls the relay from one thread and broadcasts its packets.
+calls the relay from one thread and broadcasts its packets, and answers destination searches (client.place_search ->
+navigation.places) to the asking client only.
 Server (real engine, `--mode auto` + a fake nav relay): live loopback (20 frames under credits -> exactly one
 wave-1 answer each with the right echo and ptsSeconds, geometry/fused distance on every vehicle, rotationDegrees
 honoured, a credit-violating burst still answered once per frame, badHeader / decodeError skips, ping -> pong);
@@ -320,6 +321,127 @@ def t_nav_worker_offline() -> str:
           f"destination packet {info}")
     threads = {c for c in FakeNavRelay.calls}
     return f"sim {len(ptss)} packets, live 1 packet, tablet destination ok, relay calls {len(threads)}"
+
+
+def t_nav_place_search_offline() -> str:
+    """client.place_search -> NavWorker -> relay.search -> one navigation.places for the asking client only
+    (distanceMeters from `near`, schema-valid, a failing search answered with a redacted error); a picked place
+    reaches relay.start_live as destination_place. Server handlers: validation, sender rule, 2 searches / s."""
+    from perception.realtime.server import Client, NavWorker, Server, haversine_m
+    sys.path.insert(0, str(ENGINE_ROOT))
+    from tests.fake_nav_relay import FakeNavRelay
+    v = validators()
+    got: list[tuple[str, dict]] = []
+
+    class Srv:
+        def post(self, fn, *args):
+            fn(*args)
+
+        def deliver_places(self, key, data):
+            got.append((key, json.loads(data)))
+
+        def broadcast_nav(self, data):
+            pass
+
+        def broadcast_error(self, code, msg):
+            raise AssertionError(f"relay error {code}: {msg}")
+
+        def broadcast_hello(self, *_):
+            pass
+
+        def media_pts_now(self):
+            return None
+    base = dict(nav_route=None, nav_destination=None, nav_origin=None, nav_provider="mock", phase1_dir=None,
+                node="node")
+    near = {"lat": 33.7756, "lng": -84.3963}
+    place = {"label": "Foxtail Coffee - Society Atlanta", "placeId": "ChIJexample1",
+             "coordinate": {"lat": 33.7766, "lng": -84.3838}}
+    w = NavWorker(Srv(), FakeNavRelay, SimpleNamespace(nav_session=None, nav_live=True, **base))
+    w.start()
+    try:
+        t0 = time.time()
+        while not w.running and time.time() - t0 < 3:
+            time.sleep(0.02)
+        w.submit_search("c2", "s1", "coffee", near)
+        w.submit_search("c3", "s2", "coffee", None)
+        w.submit_search("c2", "s3", "fail", near)
+        t0 = time.time()
+        while len(got) < 3 and time.time() - t0 < 3:
+            time.sleep(0.02)
+        check(len(got) == 3, f"one navigation.places per search: {got}")
+        for _, m in got:
+            assert_valid(v, m)
+        by_id = {m["requestId"]: (k, m) for k, m in got}
+        k, m = by_id["s1"]
+        check(k == "c2" and m["query"] == "coffee" and m["provider"] == "mock" and m["error"] is None, f"{k} {m}")
+        check(len(m["places"]) == 2 and all(p["distanceMeters"] == round(haversine_m(near, p["location"]), 1)
+                                            for p in m["places"]), f"distances {m['places']}")
+        check(abs(m["places"][0]["distanceMeters"] - 1162) < 5, f"haversine {m['places'][0]['distanceMeters']}")
+        k, m = by_id["s2"]
+        check(k == "c3" and m["places"] and all(p["distanceMeters"] is None for p in m["places"]), f"no near {m}")
+        k, m = by_id["s3"]
+        check(k == "c2" and m["places"] == [] and "HTTP 500" in (m["error"] or "")
+              and "SECRET_TEST_KEY" not in m["error"] and "REDACTED" in m["error"], f"failed search {m}")
+        w.set_destination(place["label"], place)
+        t0 = time.time()
+        while ("start_live_place", place) not in FakeNavRelay.calls and time.time() - t0 < 3:
+            time.sleep(0.02)
+        check(("start_live_place", place) in FakeNavRelay.calls, "picked place -> start_live(destination_place)")
+        check(w.info()["destination"] == place["label"], f"hello destination {w.info()}")
+    finally:
+        w.stop()
+        w.join(2)
+
+    # Server handlers (loop side), with a stub server: what reaches the worker, what the client is told.
+    class NavStub:
+        running, mode = True, "live"
+
+        def __init__(self):
+            self.dest, self.searches = [], []
+
+        def set_destination(self, query, place=None):
+            self.dest.append((query, place))
+
+        def submit_search(self, *args):
+            self.searches.append(args)
+    nav = NavStub()
+    c = Client(None, "test")
+    srv = SimpleNamespace(nav=nav, session=SimpleNamespace(controller=c.key), a=SimpleNamespace(nav_provider="mock"))
+    srv._live_nav_sender = lambda *args: Server._live_nav_sender(srv, *args)
+
+    def sample(name):
+        return json.loads((SAMPLES_V2 / name).read_text(encoding="utf-8"))
+
+    def last_ctrl():
+        return json.loads(c.ctrl[-1]) if c.ctrl else None
+    Server.on_destination(srv, c, sample("client.destination.place.json"))
+    Server.on_destination(srv, c, sample("client.destination.json"))
+    check(nav.dest == [(place["label"], place), ("Piedmont Park, Atlanta", None)], f"destinations {nav.dest}")
+    Server.on_destination(srv, c, {**sample("client.destination.place.json"), "location": {"lat": 95.0, "lng": 0}})
+    check(len(nav.dest) == 2 and last_ctrl()["code"] == "badMessage", f"bad location {last_ctrl()}")
+    search = sample("client.place_search.json")
+    for _ in range(3):
+        Server.on_place_search(srv, c, search)
+    check(nav.searches == [(c.key, "s1", "coffee", search["near"])] * 2, f"searches {nav.searches}")
+    limited = last_ctrl()
+    assert_valid(v, limited)
+    check(limited["type"] == "navigation.places" and limited["error"] == "rate limited" and not limited["places"],
+          f"third search in a second: {limited}")
+    c.search_times[0] -= 1.1                               # a second later: answered again
+    Server.on_place_search(srv, c, {**search, "near": None})
+    check(len(nav.searches) == 3 and nav.searches[-1][3] is None, f"after a second {nav.searches}")
+    for bad in ({**search, "requestId": ""}, {**search, "query": " "}, {**search, "near": {"lat": "x", "lng": 0}}):
+        c._err_last.clear()
+        Server.on_place_search(srv, c, bad)
+        check(last_ctrl()["code"] == "badMessage", f"bad search {bad} -> {last_ctrl()}")
+    srv.session.controller = "someone-else"
+    Server.on_place_search(srv, c, search)
+    check(last_ctrl()["code"] == "notUplinkClient", f"sender rule {last_ctrl()}")
+    nav.running = False
+    Server.on_place_search(srv, c, search)
+    check(last_ctrl()["code"] == "modeNotAvailable" and len(nav.searches) == 3, f"no live nav {last_ctrl()}")
+    return (f"3 searches -> 3 answers to the right clients, {len(by_id['s1'][1]['places'])} places with distances; "
+            f"picked place routed; rate limit, validation and sender rule ok")
 
 
 def t_nav_failures_and_trip_checks() -> str:
@@ -783,6 +905,7 @@ def main() -> int:
     for name, fn in [("schemas well-formed", t_schemas_wellformed), ("samples validate", t_samples_validate),
                      ("SDC1 header round trip", t_header_roundtrip), ("wire builders", t_wire_offline),
                      ("geometry distance", t_geometry_distance), ("nav worker (fake relay)", t_nav_worker_offline),
+                     ("nav place search (fake relay)", t_nav_place_search_offline),
                      ("nav failures + trip_state checks", t_nav_failures_and_trip_checks)]:
         ok &= run_test(name, fn)
     if not a.offline:

@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hackgt13.local/contracts/schemas/navigation.places.schema.json",
+  "title": "navigation.places (protocol v2)",
+  "description": "Server -> the client that sent client.place_search: the matching places, best first (at most 8). On failure places is empty and error says why (the provider's message; never an API key).",
+  "type": "object",
+  "required": [
+    "type",
+    "schemaVersion",
+    "serverTimeMs",
+    "requestId",
+    "query",
+    "provider",
+    "places",
+    "error"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "type": {
+      "const": "navigation.places"
+    },
+    "schemaVersion": {
+      "const": 2
+    },
+    "serverTimeMs": {
+      "type": "integer"
+    },
+    "requestId": {
+      "type": "string"
+    },
+    "query": {
+      "type": "string"
+    },
+    "provider": {
+      "type": "string",
+      "description": "mock | google"
+    },
+    "places": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "required": [
+          "label",
+          "location"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "placeId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "label": {
+            "type": "string",
+            "description": "Display name, e.g. \"Foxtail Coffee - Society Atlanta\"."
+          },
+          "address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Formatted address."
+          },
+          "location": {
+            "type": "object",
+            "required": [
+              "lat",
+              "lng"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "lat": {
+                "type": "number",
+                "minimum": -90,
+                "maximum": 90
+              },
+              "lng": {
+                "type": "number",
+                "minimum": -180,
+                "maximum": 180
+              }
+            }
+          },
+          "distanceMeters": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0,
+            "description": "Straight-line distance from `near` (null without it)."
+          }
+        }
+      }
+    },
+    "error": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

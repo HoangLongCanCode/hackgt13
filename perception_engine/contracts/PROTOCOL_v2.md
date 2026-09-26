@@ -135,6 +135,24 @@ packets change. `perception.hello` `navigation.destination` echoes the current t
 `perception.error modeNotAvailable`. The Kotlin app sends it when the destination in its settings differs from the
 hello's.
 
+### `client.place_search` → `navigation.places` (live; the tablet's destination search)
+```json
+{ "type": "client.place_search", "requestId": "s1", "query": "coffee", "near": { "lat": 33.7756, "lng": -84.3963 } }
+{ "type": "navigation.places", "schemaVersion": 2, "serverTimeMs": 1790000000500, "requestId": "s1", "query": "coffee", "provider": "google",
+  "places": [ { "placeId": "ChIJ...", "label": "Foxtail Coffee - Society Atlanta", "address": "811 Peachtree St NE ...", "location": { "lat": 33.7766, "lng": -84.3838 }, "distanceMeters": 1162.0 } ],
+  "error": null }
+```
+Free-text search for a destination (a name, a kind of place, an address), biased around `near` (the tablet's latest
+GPS fix). The phase1 provider answers: Google = Places API Text Search (falling back to the Geocoding API when Places
+is not enabled), mock = made-up places near `near`. The answer goes to the sender only, echoes `requestId`, lists at
+most 8 places best first; on failure `places` is empty and `error` says why (never a key). At most 2 searches per
+second per client are answered (the rest get `error` "rate limited"). Sent on submit, not per keystroke. Same sender
+rule and `modeNotAvailable` as `client.destination`. Picking a result sends `client.destination` with its `location`
+(and `placeId`), so the laptop routes to exactly that place without geocoding the label again:
+```json
+{ "type": "client.destination", "query": "Foxtail Coffee - Society Atlanta", "placeId": "ChIJ...", "location": { "lat": 33.7766, "lng": -84.3838 } }
+```
+
 ### `navigation.packet` (server → client; sim: for the current playback position, ~2 Hz; live: after each `client.trip_state`)
 ```json
 { "type": "navigation.packet", "schemaVersion": 2, "serverTimeMs": 1790000000000,

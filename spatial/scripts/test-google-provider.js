@@ -5,6 +5,7 @@ const { encodePolyline } = require('../phase1/polylines');
 
 const calls = [];
 let routesStatus = 200;
+let placesStatus = 200;
 
 const origin = { lat: 33.7756, lng: -84.3963 };
 const dest = { lat: 33.7853, lng: -84.3733 };
@@ -15,7 +16,16 @@ global.fetch = async (url, init = {}) => {
   const u = new URL(String(url));
   const reply = (status, body) => ({ ok: status >= 200 && status < 300, status, json: async () => body, text: async () => JSON.stringify(body) });
   if (u.pathname.endsWith('/geocode/json')) {
-    return reply(200, { status: 'OK', results: [{ formatted_address: 'Piedmont Park, Atlanta, GA, USA', place_id: 'pp1', geometry: { location: dest } }] });
+    return reply(200, { status: 'OK', results: [{ formatted_address: 'Piedmont Park, Atlanta, GA, USA', place_id: 'pp1', geometry: { location: dest },
+      address_components: [{ long_name: 'Piedmont Park', types: ['park', 'point_of_interest'] }] }] });
+  }
+  if (u.hostname === 'places.googleapis.com') {
+    if (placesStatus !== 200) return reply(placesStatus, { error: { code: placesStatus, message: 'Places API (New) has not been used in project 123 before or it is disabled.', status: 'PERMISSION_DENIED' } });
+    return reply(200, { places: [
+      { id: 'ChIJfox', displayName: { text: 'Foxtail Coffee', languageCode: 'en' }, formattedAddress: '811 Peachtree St NE, Atlanta, GA 30308, USA', location: { latitude: 33.7766, longitude: -84.3838 } },
+      { id: 'ChIJurb', displayName: { text: 'Urban Grind' }, formattedAddress: '962 Marietta St NW, Atlanta, GA 30318, USA', location: { latitude: 33.7801, longitude: -84.4104 } },
+      { id: 'ChIJnoloc', displayName: { text: 'No location' } },
+    ] });
   }
   if (u.hostname === 'routes.googleapis.com') {
     if (routesStatus !== 200) return reply(routesStatus, { error: { code: routesStatus, message: 'Routes API has not been used in project 123 before or it is disabled.', status: 'PERMISSION_DENIED' } });
@@ -73,11 +83,37 @@ global.fetch = async (url, init = {}) => {
   assert.strictEqual(legacy.steps[0].maneuver, 'left');
   assert.strictEqual(legacy.steps[0].roadName, 'Juniper St');
 
+  // Places Text Search: key + field mask in headers, biased around `near`, places without a location dropped.
+  const near = { lat: 33.7756, lng: -84.3963 };
+  const found = await google.searchPlaces('coffee', { ...config, near });
+  const pc = calls.filter((c) => c.url.includes('places.googleapis.com')).pop();
+  assert.ok(pc, 'Places API called');
+  assert.ok(!pc.url.includes('TEST_KEY_123'), 'no key in the Places URL');
+  assert.strictEqual(pc.init.headers['X-Goog-Api-Key'], 'TEST_KEY_123');
+  assert.strictEqual(pc.init.headers['X-Goog-FieldMask'], 'places.id,places.displayName,places.formattedAddress,places.location');
+  const sent = JSON.parse(pc.init.body);
+  assert.strictEqual(sent.textQuery, 'coffee');
+  assert.strictEqual(sent.maxResultCount, 8);
+  assert.deepStrictEqual(sent.locationBias, { circle: { center: { latitude: near.lat, longitude: near.lng }, radius: 20000 } });
+  assert.deepStrictEqual(found, [
+    { placeId: 'ChIJfox', label: 'Foxtail Coffee', address: '811 Peachtree St NE, Atlanta, GA 30308, USA', location: { lat: 33.7766, lng: -84.3838 } },
+    { placeId: 'ChIJurb', label: 'Urban Grind', address: '962 Marietta St NW, Atlanta, GA 30318, USA', location: { lat: 33.7801, lng: -84.4104 } },
+  ]);
+  await google.searchPlaces('coffee', config);
+  assert.ok(!('locationBias' in JSON.parse(calls.filter((c) => c.url.includes('places.googleapis.com')).pop().init.body)), 'no bias without near');
+
+  // Places API not enabled for the project (403): falls back to the Geocoding API.
+  placesStatus = 403;
+  const geocoded = await google.searchPlaces('Piedmont Park', { ...config, near });
+  assert.deepStrictEqual(geocoded, [
+    { placeId: 'pp1', label: 'Piedmont Park', address: 'Piedmont Park, Atlanta, GA, USA', location: dest },
+  ]);
+
   // Errors never carry the key.
   const http = require('../phase1/providers/http');
   assert.strictEqual(http.redact('https://maps.googleapis.com/x?address=a&key=TEST_KEY_123'), 'https://maps.googleapis.com/x?address=a&key=REDACTED');
 
-  console.log('google provider: 4/4 checks passed (geocode, Routes API, Directions fallback, key redaction)');
+  console.log('google provider: 6/6 checks passed (geocode, Routes API, Directions fallback, Places search, Places -> Geocoding fallback, key redaction)');
 })().catch((e) => {
   console.error(e);
   process.exit(1);

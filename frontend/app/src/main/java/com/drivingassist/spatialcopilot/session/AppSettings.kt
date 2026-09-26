@@ -2,6 +2,7 @@ package com.drivingassist.spatialcopilot.session
 
 import android.content.Context
 import android.content.Intent
+import com.drivingassist.copilot.perception.GeoPoint
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 /** Where the road picture and the perception results come from. */
@@ -57,6 +58,13 @@ data class AppSettings(
      * (mock or Google) builds the route from this tablet's GPS. Blank = the laptop's own --nav-destination.
      */
     val destination: String = "",
+    /**
+     * LIVE: set when [destination] is a place picked in "Where to?" (its label): the laptop routes to exactly this
+     * point instead of geocoding the label. Null for a typed destination.
+     */
+    val destinationLocation: GeoPoint? = null,
+    /** Provider place id of the picked place (with [destinationLocation]). */
+    val destinationPlaceId: String? = null,
 ) {
     fun save(context: Context) {
         prefs(context).edit()
@@ -69,6 +77,8 @@ data class AppSettings(
             .putBoolean(KEY_SPEED_GATE, gateCriticalBySpeed)
             .putBoolean(KEY_MONITOR, cameraOnMonitor)
             .putString(KEY_DESTINATION, destination)
+            .putString(KEY_DESTINATION_LOCATION, destinationLocation?.let(::formatLocation)) // null removes the key
+            .putString(KEY_DESTINATION_PLACE_ID, destinationPlaceId)
             .apply()
     }
 
@@ -92,8 +102,21 @@ data class AppSettings(
         private const val KEY_SPEED_GATE = "gate_critical_by_speed"
         private const val KEY_MONITOR = "camera_on_monitor"
         private const val KEY_DESTINATION = "destination"
+        private const val KEY_DESTINATION_LOCATION = "destination_location"
+        private const val KEY_DESTINATION_PLACE_ID = "destination_place_id"
 
         private fun prefs(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+        /** "lat,lng" as saved in the preferences. */
+        fun formatLocation(p: GeoPoint): String = "${p.lat},${p.lng}"
+
+        /** Inverse of [formatLocation]; null for anything malformed or out of range. */
+        fun parseLocation(raw: String?): GeoPoint? {
+            val parts = raw?.split(',')?.takeIf { it.size == 2 } ?: return null
+            val lat = parts[0].trim().toDoubleOrNull() ?: return null
+            val lng = parts[1].trim().toDoubleOrNull() ?: return null
+            return if (lat in -90.0..90.0 && lng in -180.0..180.0) GeoPoint(lat, lng) else null
+        }
 
         /** ws:// or wss:// and parseable by OkHttp (a bad saved URL must not crash every launch). */
         fun isValidUrl(raw: String): Boolean {
@@ -117,6 +140,8 @@ data class AppSettings(
                 gateCriticalBySpeed = p.getBoolean(KEY_SPEED_GATE, false),
                 cameraOnMonitor = p.getBoolean(KEY_MONITOR, true),
                 destination = p.getString(KEY_DESTINATION, null).orEmpty(),
+                destinationLocation = parseLocation(p.getString(KEY_DESTINATION_LOCATION, null)),
+                destinationPlaceId = p.getString(KEY_DESTINATION_PLACE_ID, null),
             )
         }
 
@@ -128,7 +153,9 @@ data class AppSettings(
             extras.getString(EXTRA_URL)?.trim()?.takeIf(::isValidUrl)?.let { s = s.copy(serverUrl = it) }
             extras.getString(EXTRA_VIDEO)?.trim()?.takeIf { it.isNotEmpty() }?.let { s = s.copy(simVideoId = it) }
             if (extras.containsKey(EXTRA_DEBUG)) s = s.copy(debug = extras.getBoolean(EXTRA_DEBUG))
-            extras.getString(EXTRA_DESTINATION)?.trim()?.let { s = s.copy(destination = it.take(200)) }
+            extras.getString(EXTRA_DESTINATION)?.trim()?.take(200)?.takeIf { it != s.destination }?.let {
+                s = s.copy(destination = it, destinationLocation = null, destinationPlaceId = null) // typed: geocoded
+            }
             return s
         }
     }

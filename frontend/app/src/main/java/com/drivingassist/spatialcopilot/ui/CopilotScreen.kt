@@ -54,6 +54,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -96,6 +97,7 @@ fun CopilotScreen(viewModel: CopilotViewModel) {
     fun granted(p: String) = ContextCompat.checkSelfPermission(appContext, p) == PackageManager.PERMISSION_GRANTED
     var cameraGranted by remember { mutableStateOf(granted(Manifest.permission.CAMERA)) }
     var showSettings by remember { mutableStateOf(false) }
+    var showSearch by remember { mutableStateOf(false) }
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
         cameraGranted = result[Manifest.permission.CAMERA] ?: granted(Manifest.permission.CAMERA)
         if (granted(Manifest.permission.ACCESS_FINE_LOCATION) || granted(Manifest.permission.ACCESS_COARSE_LOCATION)) session.startLocation()
@@ -126,6 +128,8 @@ fun CopilotScreen(viewModel: CopilotViewModel) {
                 SourceMode.DEMO -> DemoBackdrop()
             }
             SpatialArEngine(session = session, debug = settings.debug, modifier = Modifier.fillMaxSize())
+            // LIVE: "Where to?" under the status chip; the laptop searches places and routes to the one tapped.
+            val bridge = session.bridge?.takeIf { session.settings.mode == SourceMode.LIVE }
             Chrome(
                 session = session,
                 settings = settings,
@@ -136,7 +140,23 @@ fun CopilotScreen(viewModel: CopilotViewModel) {
                 onAskCamera = { launcher.launch(arrayOf(Manifest.permission.CAMERA)) },
                 onChipClick = { if (status.line1.contains("TAKEN OVER")) viewModel.reclaim() else showSettings = true },
                 onChipLongClick = viewModel::toggleDebug,
-            )
+            ) {
+                if (bridge != null) {
+                    if (showSearch) {
+                        val state by session.placeSearch.collectAsStateWithLifecycle()
+                        val hello by bridge.serverHello.collectAsStateWithLifecycle()
+                        PlaceSearchPanel(
+                            state = state,
+                            liveNavigation = hello?.let { it.navigationMode == "live" },
+                            onSearch = viewModel::search,
+                            onPick = { viewModel.goTo(it); showSearch = false },
+                            onClose = { showSearch = false },
+                        )
+                    } else {
+                        WhereToButton(settings.destination, onClick = { showSearch = true })
+                    }
+                }
+            }
             if (showSettings) {
                 SettingsDialog(
                     initial = settings,
@@ -171,6 +191,8 @@ private fun Chrome(
     onAskCamera: () -> Unit,
     onChipClick: () -> Unit,
     onChipLongClick: () -> Unit,
+    /** Under the status chip: LIVE's "Where to?" button or search panel (empty in the other modes). */
+    search: @Composable () -> Unit,
 ) {
     Box(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(16.dp)) {
         Column(Modifier.align(Alignment.TopStart), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -179,6 +201,7 @@ private fun Chrome(
                 debug = settings.debug,
                 modifier = Modifier.combinedClickable(onClick = onChipClick, onLongClick = onChipLongClick),
             )
+            search()
             if (settings.debug) DebugPanel(status.debugLines)
         }
         route?.let { ManeuverCard(it, session.routeDistanceNow(it), Modifier.align(Alignment.TopEnd)) }
@@ -314,6 +337,17 @@ private fun ManeuverCard(route: RouteGuide, distanceNow: Double?, modifier: Modi
         listOfNotNull(remaining, eta).takeIf { it.isNotEmpty() }?.let {
             Text(it.joinToString(" · "), color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp)
         }
+        // Where phase1 routes to (packet destination.label: the typed destination or the picked place's label).
+        route.destination?.takeIf { route.provider != "demo" }?.let {
+            Text(
+                text = "to $it",
+                color = Color.White.copy(alpha = 0.7f),
+                fontSize = 12.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.widthIn(max = 300.dp),
+            )
+        }
         when {
             route.provider == "demo" -> Text("DEMO ROUTE", color = Amber, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
             route.stale -> Text("ROUTE HELD · NO UPDATES", color = Amber, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
@@ -330,7 +364,10 @@ private fun RouteMapCard(route: RouteGuide, modifier: Modifier = Modifier) {
     val car = route.carLocation ?: return
     val points = remember(route.polyline) { RouteMap.decode(route.polyline.orEmpty()) }
     if (points.size < 2) return
-    val heading = route.headingDegrees?.takeIf { it > 0.0 } ?: RouteMap.routeHeadingNear(points, car) ?: 0.0
+    // GPS course is only meaningful while moving; standing still (or indoors) the map turns with the route instead.
+    val moving = (route.speedMps ?: 0.0) >= 2.0
+    val heading = (if (moving) route.headingDegrees?.takeIf { it > 0.0 } else null)
+        ?: RouteMap.routeHeadingNear(points, car) ?: 0.0
     val projected = RouteMap.project(points, car, heading)
     val destination = projected.last()
     Box(
@@ -414,7 +451,7 @@ private fun SettingsDialog(
                         label = { Text("Destination (live navigation)") },
                         placeholder = { Text("e.g. Piedmont Park, Atlanta") },
                     )
-                    Text("The laptop routes there from this tablet's GPS (Google Maps with a key in spatial/.env, else the mock route).", fontSize = 12.sp)
+                    Text("The laptop routes there from this tablet's GPS (Google Maps with a key in spatial/.env, else the mock route). Or tap Where to? to search.", fontSize = 12.sp)
                 }
                 if (draft.mode == SourceMode.SIM) {
                     OutlinedTextField(value = video, onValueChange = { video = it }, singleLine = true, modifier = Modifier.fillMaxWidth(), label = { Text("Sim clip id") })
@@ -433,7 +470,16 @@ private fun SettingsDialog(
             TextButton(onClick = {
                 val u = url.trim()
                 if (!AppSettings.isValidUrl(u)) { error = "Use a ws:// or wss:// URL"; return@TextButton }
-                onApply(draft.copy(serverUrl = u, simVideoId = video.trim().ifEmpty { AppSettings.DEFAULT_VIDEO }, destination = destination.trim()))
+                val d = destination.trim()
+                // An edited destination is typed text (geocoded on the laptop); an unchanged one keeps a picked place's location.
+                val picked = d == initial.destination
+                onApply(
+                    draft.copy(
+                        serverUrl = u, simVideoId = video.trim().ifEmpty { AppSettings.DEFAULT_VIDEO }, destination = d,
+                        destinationLocation = initial.destinationLocation.takeIf { picked },
+                        destinationPlaceId = initial.destinationPlaceId.takeIf { picked },
+                    ),
+                )
             }) { Text("Apply") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },

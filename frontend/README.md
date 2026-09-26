@@ -94,7 +94,7 @@ the app has run once (it creates `files/sim/` itself; a folder made with `adb sh
 
 | Key | File | Used by |
 |---|---|---|
-| `GOOGLE_MAPS_API_KEY` (Geocoding API + Routes API enabled) | `spatial/.env` (template `spatial/.env.example`) | phase1's Google provider, run by the perception server's relay |
+| `GOOGLE_MAPS_API_KEY` (Geocoding API + Routes API enabled; Places API for "Where to?") | `spatial/.env` (template `spatial/.env.example`) | phase1's Google provider, run by the perception server's relay |
 | `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID` | `perception_engine/.env` (template `perception_engine/.env.example`) | the perception server's `POST /tts` proxy |
 
 Both files are gitignored and stay on the laptop; the tablet only talks to the laptop. The route map on the tablet is
@@ -111,6 +111,17 @@ drawn from the route line phase1 sends, so the app needs no Maps SDK key.
    heading-up, 300 m) follow them.
    Or at launch (the whole command in one pair of quotes, the place in inner quotes, or `adb shell` splits it at the spaces):
    `adb shell "am start -S -n com.drivingassist.spatialcopilot/.MainActivity --es perception.source live --es perception.destination 'Piedmont Park, Atlanta'"`.
+
+### Where to? (search a place on the tablet)
+
+In LIVE mode, tap **Where to?** under the status chip, type "coffee", a name or an address and press Search on the
+keyboard (one search per submit, never per keystroke). The laptop searches around the tablet's latest GPS fix
+(`client.place_search` -> `navigation.places`; Google Places Text Search, or the Geocoding API when Places is not
+enabled for the key; made-up places with `--nav-provider mock`) and the panel lists up to 8 results with address and
+distance. Tap one: the app sends `client.destination` with the place's exact location, so the laptop routes there
+without geocoding the name, saves the label as the Destination and closes the panel; the maneuver card shows
+"to <label>" once the route arrives. Without `--nav-live` on the laptop the panel says so. The Google key never
+leaves the laptop.
 
 ## Voice
 
@@ -129,7 +140,7 @@ then earcons. Visuals never depend on audio; the settings can turn voice off.
 | `.../ar/` | `FillCenter` (server image -> view), `GroundProjector` (road plane, same maths as the server's `groundXZ`), `EgoLane`, `RouteArrows`, `ArScene` (per-frame scene, fades, lead highlight, Debug layer) |
 | `.../nav/` | `RouteGuide` (fields of phase1's `navigation.packet`), `DemoDrive` (DEMO script) |
 | `.../voice/` | `CueCatalog`, `CuePolicy`, `VoiceArbiter`, `VoiceBus`, `Earcons`, `VoiceSources` (`/tts` proxy, Android TTS), `VoiceCoordinator` |
-| `.../ui/` | `CopilotScreen` (chrome, settings), `SpatialArEngine` (draws the scene at display rate), `SimVideoBackground` |
+| `.../ui/` | `CopilotScreen` (chrome, settings), `PlaceSearch` ("Where to?" panel), `SpatialArEngine` (draws the scene at display rate), `SimVideoBackground` |
 | `.../camera/` | `DrivingCamera` (CameraX preview + `KEEP_ONLY_LATEST` analysis), `YuvJpegEncoder` |
 | `../perception_engine/android/perception-bridge/` | shared pure-JVM library: PROTOCOL_v2 client, `WorldModel`, `DrivingContextEngine` (included as `:perception-bridge`) |
 

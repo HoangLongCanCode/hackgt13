@@ -11,12 +11,14 @@ import com.drivingassist.copilot.context.predictedAt
 import com.drivingassist.copilot.perception.ClientDestination
 import com.drivingassist.copilot.perception.ClientHello
 import com.drivingassist.copilot.perception.ClientPing
+import com.drivingassist.copilot.perception.ClientPlaceSearch
 import com.drivingassist.copilot.perception.ClientPlayback
 import com.drivingassist.copilot.perception.ClientTripState
 import com.drivingassist.copilot.perception.ErrorMessage
 import com.drivingassist.copilot.perception.GeoPoint
 import com.drivingassist.copilot.perception.HelloMessage
 import com.drivingassist.copilot.perception.NavigationPacketMessage
+import com.drivingassist.copilot.perception.NavigationPlacesMessage
 import com.drivingassist.copilot.perception.PerceptionCodec
 import com.drivingassist.copilot.perception.PerceptionFrame
 import com.drivingassist.copilot.perception.PerceptionMessage
@@ -63,6 +65,7 @@ import kotlin.math.roundToLong
  * //                  val w = bridge.resultForPts(player.currentPosition / 1000.0)  // sim
  * // UI:              bridge.world / context / events / navigation / link
  * // GPS (live nav):  bridge.sendTripState(ClientTripState(...))  ~1 Hz
+ * // "Where to?":     val id = bridge.searchPlaces("coffee", near)  -> bridge.places; bridge.sendDestination(label, placeId, location)
  * ```
  *
  * - **live**: [offerCameraFrame] sends `SDC1` header + JPEG under credit flow control (never queues).
@@ -71,7 +74,8 @@ import kotlin.math.roundToLong
  * - **video**: results of a clip the laptop plays itself (laptop-side testing).
  * - **navigation**: `navigation.packet`s from the phase1 route engine (relayed by the laptop) land
  *   in [navigation]; they also drive the Driving Context's lane guidance. [sendTripState] feeds
- *   live GPS to the relay. Route logic stays in phase1.
+ *   live GPS to the relay; [searchPlaces] / [places] / [sendDestination] pick where it routes to.
+ *   Route logic stays in phase1.
  *
  * Auto-reconnects with backoff and re-sends the [ClientHello] after every reconnect; pings ~1 Hz.
  * [world] merges wave-1 frames and wave-2 updates ([WorldModel]); [context] / [events] come from
@@ -137,6 +141,18 @@ class PerceptionBridge(
 
     /** What the Driving Context uses as navigation input (from packets, or a [setNavigation] override). */
     val navigationState: StateFlow<NavigationState?> = navigationInput.asStateFlow()
+
+    private val _places = MutableStateFlow<NavigationPlacesMessage?>(null)
+
+    /**
+     * The laptop's `navigation.places` answer to the newest [searchPlaces]: null while that search is pending
+     * (and before the first); answers to older searches are dropped.
+     */
+    val places: StateFlow<NavigationPlacesMessage?> = _places.asStateFlow()
+
+    /** requestId of the newest [searchPlaces]; only its answer lands in [places]. */
+    @Volatile private var newestSearchId: String? = null
+    private val searchCounter = AtomicLong()
 
     @Volatile private var clientHello: ClientHello? = null
     @Volatile private var socket: WebSocket? = null
@@ -361,15 +377,35 @@ class PerceptionBridge(
 
     /**
      * Live navigation: where to go (a place or address, at most 200 characters). The laptop resolves it with its
-     * phase1 provider and builds the route from the next GPS fix. Returns false when it could not be sent (not
-     * connected, taken over, blank). Not re-sent on reconnect: the server keeps the destination.
+     * phase1 provider and builds the route from the next GPS fix. With [location] (a place picked from [places],
+     * [query] = its label) the laptop routes to exactly that point and does not geocode. Returns false when it
+     * could not be sent (not connected, taken over, blank). Not re-sent on reconnect: the server keeps the destination.
      */
-    fun sendDestination(query: String): Boolean {
+    fun sendDestination(query: String, placeId: String? = null, location: GeoPoint? = null): Boolean {
         val q = query.trim().take(ClientDestination.MAX_LENGTH)
         if (q.isEmpty()) return false
         val ws = socket ?: return false
         if (closed || takenOver) return false
-        return ws.send(PerceptionCodec.encodeClient(ClientDestination(q)))
+        val id = placeId?.trim()?.takeIf { it.isNotEmpty() && it.length <= ClientDestination.MAX_PLACE_ID_LENGTH }
+        return ws.send(PerceptionCodec.encodeClient(ClientDestination(q, id, location)))
+    }
+
+    /**
+     * Live navigation: searches places for a destination ("coffee", a name, an address; at most 200 characters)
+     * around [near] (the latest GPS fix, null = no bias). Call on submit, not per keystroke (the laptop answers at
+     * most 2 searches per second). The answer arrives in [places], which is cleared now. Returns the requestId,
+     * null when nothing was sent (not connected, taken over, blank query).
+     */
+    fun searchPlaces(query: String, near: GeoPoint? = null): String? {
+        val q = query.trim().take(ClientPlaceSearch.MAX_LENGTH)
+        if (q.isEmpty()) return null
+        val ws = socket ?: return null
+        if (closed || takenOver) return null
+        val id = "s${searchCounter.incrementAndGet()}"
+        // Before the send: the answer may arrive on the socket thread before send() returns.
+        newestSearchId = id
+        _places.value = null
+        return if (ws.send(PerceptionCodec.encodeClient(ClientPlaceSearch(id, q, near)))) id else null
     }
 
     /** [headingDegrees] / [speedMps] null (no bearing / speed in the fix) are sent as 0, as PROTOCOL_v2 asks. */
@@ -497,6 +533,8 @@ class PerceptionBridge(
                     if (msg.code == ErrorMessage.NOT_UPLINK_CLIENT) markTakenOver()
                 }
                 is NavigationPacketMessage -> onNavigation(msg, now)
+                // Sent to the searching client only; an answer to an older search is superseded.
+                is NavigationPlacesMessage -> if (msg.requestId != null && msg.requestId == newestSearchId) _places.value = msg
                 else -> Unit
             }
             if (msg is HelloMessage || msg is PerceptionFrame || msg is PerceptionUpdate || msg is StatsMessage) {

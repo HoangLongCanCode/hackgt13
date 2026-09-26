@@ -1,15 +1,23 @@
 const { createRouteProvider } = require('./providers');
 
-async function buildRouteSnapshot({ origin, originQuery, destinationQuery, providerName, providerOptions = {} }) {
+// destinationPlace ({label, placeId, coordinate}, e.g. picked from searchPlaces) is routed to as it is, without
+// geocoding its label again; otherwise destinationQuery is resolved by the provider.
+async function buildRouteSnapshot({ origin, originQuery, destinationQuery, destinationPlace, providerName, providerOptions = {} }) {
   const provider = createRouteProvider({ providerName });
   const resolvedOrigin = originQuery
     ? await provider.resolveDestination(originQuery, {
         ...providerOptions,
       })
     : { label: 'Origin', coordinate: origin };
-  const destination = await provider.resolveDestination(destinationQuery, {
-    ...providerOptions,
-  });
+  const destination = destinationPlace
+    ? {
+        label: destinationPlace.label,
+        placeId: destinationPlace.placeId,
+        coordinate: destinationPlace.coordinate,
+      }
+    : await provider.resolveDestination(destinationQuery, {
+        ...providerOptions,
+      });
   const route = await provider.fetchRoute(resolvedOrigin.coordinate, destination, providerOptions);
 
   return {
@@ -17,6 +25,15 @@ async function buildRouteSnapshot({ origin, originQuery, destinationQuery, provi
     destination,
     route,
   };
+}
+
+// Destination search: places matching free text, best first (near = {lat, lng} biases the results).
+async function searchPlaces({ query, near, providerName, providerOptions = {} }) {
+  const provider = createRouteProvider({ providerName });
+  return provider.searchPlaces(query, {
+    ...providerOptions,
+    near: near || undefined,
+  });
 }
 
 function sampleRouteTripStates(route, sampleCount = 4) {
@@ -54,5 +71,6 @@ function sampleRouteTripStates(route, sampleCount = 4) {
 
 module.exports = {
   buildRouteSnapshot,
+  searchPlaces,
   sampleRouteTripStates,
 };
