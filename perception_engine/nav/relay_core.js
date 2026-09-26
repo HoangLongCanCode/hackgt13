@@ -1,0 +1,434 @@
+'use strict';
+// Shared core of the phase1 navigation relay.
+//
+// Wraps the phase1 route engine (branch `phase1`, folder src/phase1) WITHOUT copying or
+// modifying it: every route / progress / packet computation is a call into phase1's own
+// exports (loadPhase1Session, buildSpatialNavigationPacket, buildRouteSnapshot,
+// sampleRouteTripStates, validateRoute, computeRouteProgress, getLatestTripState).
+// This module only adds the timeline (sim: media time -> trip time), the live sample
+// history, and the `navigation.packet` envelope defined in contracts/PROTOCOL_v2.md.
+//
+// Used by phase1_relay.js (stdin/stdout JSON lines), make_demo_session.js and
+// make_contract_samples.js.
+
+const fs = require('fs');
+const path = require('path');
+
+const REPO_ROOT = path.resolve(__dirname, '..', '..');
+const WORKTREE_HINT = 'git worktree add ../hackgt13-phase1 origin/phase1';
+const PROVIDERS = ['mock', 'google'];
+const LIVE_HISTORY_MAX = 600; // samples kept in live mode (~10 min at 1 Hz)
+const LIVE_CLOCK_RESET_MS = 60000; // a sample this much older than the newest one = client clock reset
+const ROUTE_RETRY_MS = 10000; // live: min delay between failed lazy route builds
+const SIM_CACHE_MAX = 512; // packets cached per sim session (keyed by sample count)
+
+function isPhase1Dir(dir) {
+  return Boolean(dir) && fs.existsSync(path.join(dir, 'src', 'phase1', 'index.js'));
+}
+
+// Resolution order: explicit (--phase1-dir) > env PHASE1_DIR > repo root (after phase1 merges
+// into main) > ../hackgt13-phase1 next to the repo (git worktree). An explicit value or
+// PHASE1_DIR that does not point at phase1 is an error (no silent fallback).
+function phase1Candidates(explicitDir) {
+  if (explicitDir) {
+    return [{ dir: path.resolve(explicitDir), from: '--phase1-dir' }];
+  }
+  if (process.env.PHASE1_DIR) {
+    return [{ dir: path.resolve(process.env.PHASE1_DIR), from: 'env PHASE1_DIR' }];
+  }
+  return [
+    { dir: REPO_ROOT, from: 'repo root (after phase1 merges into main)' },
+    { dir: path.resolve(REPO_ROOT, '..', 'hackgt13-phase1'), from: 'sibling worktree' },
+  ];
+}
+
+function resolvePhase1Dir(explicitDir) {
+  const candidates = phase1Candidates(explicitDir);
+  for (const candidate of candidates) {
+    if (isPhase1Dir(candidate.dir)) {
+      return candidate.dir;
+    }
+  }
+  const tried = candidates.map((c) => `${c.dir} (${c.from})`).join('; ');
+  throw new Error(
+    `phase1 route engine not found: no src/phase1/index.js in ${tried}. ` +
+      `Check out branch 'phase1' next to the repo (from the repo root: ${WORKTREE_HINT}) ` +
+      'or set PHASE1_DIR / pass --phase1-dir <dir>.'
+  );
+}
+
+// Load .env from the phase1 dir (GOOGLE_MAPS_API_KEY) with phase1's own loader. Values are
+// never printed; existing environment variables win.
+function loadPhase1Env(phase1Dir) {
+  const envPath = path.join(phase1Dir, '.env');
+  let loaded = false;
+  if (fs.existsSync(envPath)) {
+    try {
+      require(path.join(phase1Dir, 'scripts', 'load-env.js')).loadEnv(envPath);
+      loaded = true;
+    } catch (error) {
+      loaded = fallbackLoadEnv(envPath);
+    }
+  }
+  return { envFile: loaded, googleKey: Boolean(process.env.GOOGLE_MAPS_API_KEY) };
+}
+
+function fallbackLoadEnv(envPath) {
+  const content = fs.readFileSync(envPath, 'utf8');
+  for (const rawLine of content.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    const eq = line.indexOf('=');
+    if (!line || line.startsWith('#') || eq === -1) continue;
+    const key = line.slice(0, eq).trim();
+    let value = line.slice(eq + 1).trim();
+    if (/^(['"]).*\1$/.test(value)) value = value.slice(1, -1);
+    if (process.env[key] == null || process.env[key] === '') process.env[key] = value;
+  }
+  return true;
+}
+
+function loadPhase1(phase1Dir) {
+  const src = path.join(phase1Dir, 'src', 'phase1');
+  const index = require(src);
+  const processor = require(path.join(src, 'processor'));
+  const session = require(path.join(src, 'session'));
+  const geo = require(path.join(src, 'geo'));
+  const api = {
+    loadPhase1Session: index.loadPhase1Session,
+    buildSpatialNavigationPacket: index.buildSpatialNavigationPacket,
+    buildRouteSnapshot: index.buildRouteSnapshot,
+    sampleRouteTripStates: index.sampleRouteTripStates,
+    validateRoute: processor.validateRoute,
+    computeRouteProgress: processor.computeRouteProgress,
+    computeRouteGeometry: processor.computeRouteGeometry,
+    getLatestTripState: session.getLatestTripState,
+    haversineMeters: geo.haversineMeters,
+  };
+  const missing = Object.entries(api)
+    .filter(([, fn]) => typeof fn !== 'function')
+    .map(([name]) => name);
+  if (missing.length > 0) {
+    throw new Error(`phase1 at ${phase1Dir} does not export ${missing.join(', ')} (phase1 API changed?)`);
+  }
+  return api;
+}
+
+function isFiniteNumber(value) {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+// Normalise one trip-state sample (client.trip_state body or a trip_state.jsonl line) into the
+// phase1 upstream contract. Throws on unusable samples; missing heading/speed become 0 like the
+// android-collector does when the fix has no bearing/speed.
+function normalizeTripState(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('trip state sample must be a JSON object');
+  }
+  const location = raw.location;
+  if (!isFiniteNumber(raw.timestampMs)) {
+    throw new Error('trip state timestampMs must be a number (epoch ms)');
+  }
+  if (!location || !isFiniteNumber(location.lat) || !isFiniteNumber(location.lng) ||
+      Math.abs(location.lat) > 90 || Math.abs(location.lng) > 180) {
+    throw new Error('trip state location.lat / location.lng must be valid coordinates');
+  }
+  const sample = {
+    timestampMs: Math.round(raw.timestampMs),
+    location: { lat: location.lat, lng: location.lng },
+    heading: isFiniteNumber(raw.heading) ? raw.heading : 0,
+    speedMps: isFiniteNumber(raw.speedMps) ? Math.max(0, raw.speedMps) : 0,
+  };
+  if (isFiniteNumber(raw.accuracyMeters)) {
+    sample.accuracyMeters = raw.accuracyMeters;
+  }
+  return sample;
+}
+
+// "33.7756,-84.3963" -> {lat, lng}; anything else -> null (treated as a place query).
+function parseLatLng(value) {
+  if (typeof value !== 'string') return null;
+  const match = value.trim().match(/^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$/);
+  if (!match) return null;
+  const lat = Number(match[1]);
+  const lng = Number(match[2]);
+  if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
+  return { lat, lng };
+}
+
+function readJsonFile(filePath) {
+  return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+}
+
+// The fields the AR app's RouteState(time, action, audio, ui) and the Kotlin Driving Context use,
+// derived 1:1 from the phase1 packet (PROTOCOL_v2.md, Navigation).
+function toRouteState(packet, progress) {
+  const maneuver = packet.activeManeuver;
+  const semantics = packet.routeSemantics || {};
+  const packetProgress = packet.progress || {};
+  const audio = Array.isArray(packet.audioInstructions) ? packet.audioInstructions[0] : null;
+  const spatial = Array.isArray(packet.spatialInstructions) ? packet.spatialInstructions[0] : null;
+  return {
+    action: maneuver && maneuver.type ? maneuver.type : 'GO_STRAIGHT',
+    audio: audio && typeof audio.content === 'string' ? audio.content : '',
+    ui: spatial && spatial.type ? spatial.type : 'DISTANCE_LABEL',
+    // Same arithmetic phase1 uses for its instruction text (unrounded progress).
+    distanceMeters: maneuver && isFiniteNumber(maneuver.distanceMeters)
+      ? Math.max(0, Math.round(maneuver.distanceMeters - progress.distanceTraveledMeters))
+      : null,
+    offRoute: Boolean(packetProgress.offRoute),
+    etaSeconds: isFiniteNumber(packetProgress.etaSeconds) ? packetProgress.etaSeconds : null,
+    remainingDistanceMeters: isFiniteNumber(packetProgress.remainingDistanceMeters)
+      ? packetProgress.remainingDistanceMeters
+      : null,
+    requiredLane: semantics.requiredLane != null ? String(semantics.requiredLane) : null,
+    turnDirection: semantics.turnDirection || null,
+    roadName: semantics.roadName != null ? String(semantics.roadName) : null,
+  };
+}
+
+function round3(value) {
+  return Math.round(value * 1000) / 1000;
+}
+
+// Largest n such that trip[0..n-1].timestampMs <= t (trip sorted ascending).
+function countSamplesUpTo(trip, t) {
+  let lo = 0;
+  let hi = trip.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (trip[mid].timestampMs <= t) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+function describeRoute(route) {
+  return {
+    routeId: route.routeId,
+    provider: route.provider || null,
+    destination: route.destination && route.destination.label ? route.destination.label : null,
+    totalDistanceMeters: isFiniteNumber(route.totalDistanceMeters) ? route.totalDistanceMeters : null,
+    steps: Array.isArray(route.steps) ? route.steps.length : 0,
+  };
+}
+
+function createNavRelay({ phase1Dir, clock = Date.now, log = () => {} } = {}) {
+  const p1 = loadPhase1(phase1Dir);
+  let sim = null; // { manifest, route, trip, t0, cache }
+  let live = null; // { manifest, route, pending, samples, lastRouteError, lastRouteAttemptMs }
+
+  function buildFromSamples(manifest, route, samples) {
+    const packet = p1.buildSpatialNavigationPacket({ manifest, route, tripStates: samples });
+    const latest = p1.getLatestTripState(samples);
+    const progress = p1.computeRouteProgress(latest, route.geometry, route.totalDistanceMeters);
+    return { packet, routeState: toRouteState(packet, progress) };
+  }
+
+  function envelope(built, ptsSeconds, tripTimestampMs) {
+    return {
+      type: 'navigation.packet',
+      schemaVersion: 2,
+      serverTimeMs: clock(),
+      ptsSeconds,
+      tripTimestampMs,
+      routeState: built.routeState,
+      packet: built.packet,
+    };
+  }
+
+  function startSim(sessionDir) {
+    if (typeof sessionDir !== 'string' || !sessionDir) {
+      throw new Error('start_sim needs sessionDir (a phase1 session folder)');
+    }
+    const dir = path.resolve(sessionDir);
+    if (!fs.existsSync(path.join(dir, 'session_manifest.json'))) {
+      throw new Error(`not a phase1 session folder (no session_manifest.json): ${dir}`);
+    }
+    const session = p1.loadPhase1Session(dir);
+    p1.validateRoute(session.route);
+    const trip = [];
+    let dropped = 0;
+    for (const raw of session.tripStates) {
+      try {
+        trip.push(normalizeTripState(raw));
+      } catch (error) {
+        dropped += 1;
+      }
+    }
+    if (trip.length === 0) {
+      throw new Error(`no usable samples in ${session.manifest.tripStateFile || 'trip_state.jsonl'} (${dir})`);
+    }
+    trip.sort((a, b) => a.timestampMs - b.timestampMs);
+    const manifest = session.manifest;
+    // Optional manifest extension: where media time 0 sits on the trip clock (defaults to the
+    // first sample, as PROTOCOL_v2 specifies).
+    const t0 = isFiniteNumber(manifest.videoStartTimestampMs) ? manifest.videoStartTimestampMs : trip[0].timestampMs;
+    sim = { manifest, route: session.route, trip, t0, cache: new Map() };
+    live = null;
+    const videoFile = manifest.videoFile || null;
+    const info = {
+      mode: 'sim',
+      sessionDir: dir,
+      sessionId: manifest.sessionId || null,
+      videoFile,
+      videoId: manifest.videoId || (videoFile ? path.parse(videoFile).name : null),
+      samples: trip.length,
+      droppedSamples: dropped,
+      t0Ms: t0,
+      durationSeconds: round3((trip[trip.length - 1].timestampMs - t0) / 1000),
+      route: describeRoute(session.route),
+    };
+    log(`sim session ${info.sessionId}: ${trip.length} samples over ${info.durationSeconds} s, route ${info.route.routeId}`);
+    return { info };
+  }
+
+  function atPts(ptsSeconds) {
+    if (!sim) {
+      throw new Error('no sim session: send start_sim first');
+    }
+    if (!isFiniteNumber(ptsSeconds)) {
+      throw new Error('ptsSeconds must be a finite number');
+    }
+    const tripTimestampMs = Math.round(sim.t0 + 1000 * ptsSeconds);
+    // Samples up to that time; before the first sample the first one stands in.
+    const n = Math.max(1, countSamplesUpTo(sim.trip, tripTimestampMs));
+    let built = sim.cache.get(n);
+    if (!built) {
+      built = buildFromSamples(sim.manifest, sim.route, sim.trip.slice(0, n));
+      if (sim.cache.size >= SIM_CACHE_MAX) sim.cache.clear();
+      sim.cache.set(n, built);
+    }
+    return { message: envelope(built, round3(ptsSeconds), tripTimestampMs) };
+  }
+
+  async function buildRoute({ origin, originQuery, destinationQuery, provider }) {
+    const snapshot = await p1.buildRouteSnapshot({
+      origin,
+      originQuery,
+      destinationQuery,
+      providerName: provider,
+      // apiKey for google; origin makes the mock provider place its destination near the car.
+      providerOptions: { apiKey: process.env.GOOGLE_MAPS_API_KEY, origin },
+    });
+    // Same post-processing as phase1's scripts/process-captured-session.js.
+    const route = snapshot.route;
+    route.routeId = route.routeId || 'route_live';
+    route.destination = snapshot.destination;
+    route.origin = snapshot.origin.coordinate;
+    route.originLabel = snapshot.origin.label;
+    p1.validateRoute(route);
+    return route;
+  }
+
+  async function startLive({ routeJson, route, origin, destination, provider } = {}) {
+    const providerName = provider || 'mock';
+    if (!PROVIDERS.includes(providerName)) {
+      throw new Error(`unknown provider "${providerName}" (expected ${PROVIDERS.join(' | ')})`);
+    }
+    let liveRoute = null;
+    let pending = null;
+    if (route && typeof route === 'object') {
+      liveRoute = route;
+    } else if (routeJson) {
+      const file = path.resolve(routeJson);
+      if (!fs.existsSync(file)) throw new Error(`route file not found: ${file}`);
+      liveRoute = readJsonFile(file);
+    } else if (destination) {
+      if (providerName === 'google' && !process.env.GOOGLE_MAPS_API_KEY) {
+        throw new Error('provider "google" needs GOOGLE_MAPS_API_KEY (put it in <phase1-dir>/.env or the environment)');
+      }
+      if (origin) {
+        const originCoord = parseLatLng(origin);
+        liveRoute = await buildRoute({
+          origin: originCoord || undefined,
+          originQuery: originCoord ? undefined : origin,
+          destinationQuery: destination,
+          provider: providerName,
+        });
+      } else {
+        // No origin: the route is built from the first client.trip_state position.
+        pending = { destination, provider: providerName };
+      }
+    } else {
+      throw new Error('start_live needs routeJson, route or destination');
+    }
+    if (liveRoute) p1.validateRoute(liveRoute);
+    live = {
+      manifest: { sessionId: `live_${clock()}`, source: 'device' },
+      route: liveRoute,
+      pending,
+      samples: [],
+      lastRouteError: null,
+      lastRouteAttemptMs: 0,
+    };
+    sim = null;
+    const info = {
+      mode: 'live',
+      routeReady: Boolean(liveRoute),
+      route: liveRoute ? describeRoute(liveRoute) : null,
+      pendingDestination: pending ? pending.destination : null,
+      provider: liveRoute ? liveRoute.provider || providerName : providerName,
+    };
+    log(liveRoute
+      ? `live session: route ${info.route.routeId} (${info.route.totalDistanceMeters} m)`
+      : `live session: route to "${pending.destination}" is built from the first trip state`);
+    return { info, route: liveRoute };
+  }
+
+  async function tripState(rawSample) {
+    if (!live) {
+      throw new Error('no live session: send start_live first');
+    }
+    const sample = normalizeTripState(rawSample);
+    let routeBuilt = null;
+    if (!live.route) {
+      const now = clock();
+      if (live.lastRouteError && now - live.lastRouteAttemptMs < ROUTE_RETRY_MS) {
+        throw new Error(`route not available yet (last error: ${live.lastRouteError})`);
+      }
+      live.lastRouteAttemptMs = now;
+      try {
+        live.route = await buildRoute({
+          origin: sample.location,
+          destinationQuery: live.pending.destination,
+          provider: live.pending.provider,
+        });
+      } catch (error) {
+        live.lastRouteError = error.message;
+        throw new Error(`could not build the route to "${live.pending.destination}": ${error.message}`);
+      }
+      routeBuilt = live.route;
+      live.pending = null;
+      log(`live route built from the first trip state: ${live.route.routeId}`);
+    }
+    const history = live.samples;
+    if (history.length > 0 && sample.timestampMs < history[history.length - 1].timestampMs - LIVE_CLOCK_RESET_MS) {
+      history.length = 0; // client clock went backwards (restart / new drive): start a new history
+    }
+    history.push(sample);
+    if (history.length > LIVE_HISTORY_MAX) history.splice(0, history.length - LIVE_HISTORY_MAX);
+    const built = buildFromSamples(live.manifest, live.route, history);
+    return { message: envelope(built, null, built.packet.generatedAtMs), route: routeBuilt };
+  }
+
+  function status() {
+    if (sim) return { mode: 'sim', sessionId: sim.manifest.sessionId || null, samples: sim.trip.length };
+    if (live) return { mode: 'live', routeReady: Boolean(live.route), samples: live.samples.length };
+    return { mode: null };
+  }
+
+  return { phase1: p1, startSim, atPts, startLive, tripState, status };
+}
+
+module.exports = {
+  REPO_ROOT,
+  WORKTREE_HINT,
+  isPhase1Dir,
+  resolvePhase1Dir,
+  loadPhase1Env,
+  loadPhase1,
+  normalizeTripState,
+  parseLatLng,
+  toRouteState,
+  createNavRelay,
+};

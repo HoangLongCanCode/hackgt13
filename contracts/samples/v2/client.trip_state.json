@@ -1,0 +1,11 @@
+{
+  "type": "client.trip_state",
+  "timestampMs": 1790000000123,
+  "location": {
+    "lat": 33.7765228,
+    "lng": -84.3961545
+  },
+  "heading": 9.6,
+  "speedMps": 7.64,
+  "accuracyMeters": 4.1
+}

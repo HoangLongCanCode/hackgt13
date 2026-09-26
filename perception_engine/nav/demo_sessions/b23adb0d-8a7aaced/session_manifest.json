@@ -1,0 +1,28 @@
+{
+  "sessionId": "demo_b23adb0d-8a7aaced",
+  "capturedAtMs": 1730000000000,
+  "videoFile": "b23adb0d-8a7aaced.mov",
+  "videoId": "b23adb0d-8a7aaced",
+  "routeFile": "route.json",
+  "tripStateFile": "trip_state.jsonl",
+  "source": "simulated",
+  "notes": "SYNTHETIC DEMO SESSION: route from the phase1 mock provider, trip samples interpolated along it and timed to the clip. It does not match the video content (demo only). Real sessions come from the phase1 android-collector + route.json.",
+  "demo": {
+    "generator": "perception_engine/nav/make_demo_session.js",
+    "clip": "b23adb0d-8a7aaced",
+    "scene": "night",
+    "provider": "mock",
+    "origin": "33.7756,-84.3963",
+    "destinationQuery": "Colony Square",
+    "clipDurationSeconds": 40.26,
+    "sampleHz": 2,
+    "samples": 82,
+    "routeMeters": 404,
+    "coveredMeters": 404,
+    "meanSpeedMps": 10.03,
+    "stepsRescaled": {
+      "fromMeters": 300,
+      "toMeters": 403
+    }
+  }
+}

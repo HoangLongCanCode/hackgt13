@@ -1,0 +1,604 @@
+{
+  "_comment": "One of each PROTOCOL_v2 message from real runs (contracts/samples/v2, 2026-09-26), trimmed for reading. Order = a live session: client.hello -> perception.hello -> KSR1+JPEG frames -> perception.frame (wave 1) / perception.update (wave 2) / perception.skip; client.trip_state -> navigation.packet; perception.stats ~1 Hz.",
+  "client.hello": {
+    "type": "client.hello",
+    "protocolVersion": 2,
+    "clientId": "ws-probe",
+    "device": {
+      "manufacturer": "ksr",
+      "model": "ws_probe",
+      "osVersion": "win32"
+    },
+    "mode": "live",
+    "camera": {
+      "imageWidth": 960,
+      "imageHeight": 540,
+      "focalPx": 525.0,
+      "principalPoint": [
+        480.0,
+        270.0
+      ],
+      "mountHeightMeters": 1.3,
+      "pitchDegrees": null,
+      "lensFacing": "back",
+      "stabilization": false
+    },
+    "sim": null
+  },
+  "perception.hello": {
+    "type": "perception.hello",
+    "protocolVersion": 2,
+    "schemaVersion": 2,
+    "sessionId": "live-ws-probe-20260926T033112-e5f768",
+    "serverTimeMs": 1790411472014,
+    "mode": "live",
+    "acceptedModes": [
+      "live",
+      "sim"
+    ],
+    "source": {
+      "kind": "camera",
+      "id": "ws-probe"
+    },
+    "sourceFps": null,
+    "targetHz": 16.0,
+    "image": {
+      "width": 960,
+      "height": 540
+    },
+    "camera": {
+      "focalPx": 525.0,
+      "principalPoint": [
+        480.0,
+        270.0
+      ],
+      "horizonY": null,
+      "cameraHeightMeters": 1.3
+    },
+    "classes": "... (trimmed)",
+    "staticIdOffset": 1000000,
+    "uplink": {
+      "maxInFlight": 2,
+      "preferredWidth": 960,
+      "preferredHeight": 540,
+      "jpegQuality": 80,
+      "header": "KSR1"
+    },
+    "sim": {
+      "lookaheadSeconds": 0.35,
+      "lookaheadMode": "auto",
+      "videos": [
+        "b1d968b9-ce42734f",
+        "b1f4491b-cf446195",
+        "b1ff4656-0435391e",
+        "b204a5c1-064b0040",
+        "b2064e61-2beadd45",
+        "b20e291a-6012d836",
+        "b23adb0d-8a7aaced",
+        "b23d2079-0c019d8e",
+        "b780088d-0bf9e946",
+        "b9ecc316-529acd3c",
+        "bc07d865-f526e4d9",
+        "bf1af616-e750e7dd",
+        "c38cd3f6-c74ca48b"
+      ],
+      "videoId": null
+    },
+    "schedule": "... (trimmed)",
+    "models": "... (trimmed)",
+    "server": {
+      "modeArg": "auto",
+      "wsPath": "/perception",
+      "port": 64239,
+      "loop": false,
+      "maxInFlight": 2
+    },
+    "navigation": {
+      "mode": "sim",
+      "available": true,
+      "error": null
+    },
+    "role": "controller",
+    "safety": "... (trimmed)"
+  },
+  "uplink (binary)": [
+    "KSR1 camera-frame uplink header (contracts/PROTOCOL_v2.md): one binary WebSocket message = these 24",
+    "bytes (little-endian, Python struct '<4sHHIqHH') followed by the JPEG. Captured from ws_probe live;",
+    "the JPEG that followed was 60965 bytes (960x540, quality 80).",
+    "",
+    "hex (24 bytes): 4b 53 52 31 01 00 00 00 01 00 00 00 14 d8 ea d0 65 37 01 00 00 00 00 00",
+    ""
+  ],
+  "perception.frame": {
+    "type": "perception.frame",
+    "schemaVersion": 2,
+    "seq": 9,
+    "sessionId": "live-ws-probe-20260926T033112-e5f768",
+    "source": {
+      "kind": "camera",
+      "id": "ws-probe"
+    },
+    "frameIndex": 9,
+    "ptsSeconds": 0.9245,
+    "serverTimeMs": 1790411473167,
+    "processingMs": 134.69,
+    "image": {
+      "width": 960,
+      "height": 540
+    },
+    "camera": {
+      "focalPx": 525.0,
+      "principalPoint": [
+        480.0,
+        270.0
+      ],
+      "horizonY": 276.3,
+      "cameraHeightMeters": 1.3
+    },
+    "objects": [
+      {
+        "id": 1,
+        "class": "car",
+        "bbox": [
+          636.0,
+          239.5,
+          959.0,
+          459.5
+        ],
+        "confidence": 0.92,
+        "ageFrames": 10,
+        "distanceMeters": 4.24,
+        "distanceMethod": "fused",
+        "distanceConfidence": 0.903,
+        "lateralMeters": 2.38,
+        "ttcSeconds": 2.45,
+        "approaching": true,
+        "inEgoPath": false,
+        "lightState": null,
+        "lightConfidence": null,
+        "distanceAgeMs": 499.6
+      },
+      {
+        "id": 2,
+        "class": "car",
+        "bbox": [
+          0.0,
+          250.5,
+          42.5,
+          348.0
+        ],
+        "confidence": 0.785,
+        "ageFrames": 10,
+        "distanceMeters": 9.14,
+        "distanceMethod": "fused",
+        "distanceConfidence": 0.879,
+        "lateralMeters": -7.76,
+        "ttcSeconds": null,
+        "approaching": null,
+        "inEgoPath": false,
+        "lightState": null,
+        "lightConfidence": null,
+        "distanceAgeMs": 499.6
+      },
+      {
+        "id": 3,
+        "class": "car",
+        "bbox": [
+          298.0,
+          255.0,
+          467.0,
+          394.0
+        ],
+        "confidence": 0.901,
+        "ageFrames": 10,
+        "distanceMeters": 5.43,
+        "distanceMethod": "fused",
+        "distanceConfidence": 0.906,
+        "lateralMeters": -1.08,
+        "ttcSeconds": null,
+        "approaching": false,
+        "inEgoPath": true,
+        "lightState": null,
+        "lightConfidence": null,
+        "distanceAgeMs": 499.6
+      }
+    ],
+    "signs": [
+      {
+        "id": 1000001,
+        "signClass": "pedestrianCrossing",
+        "bbox": [
+          647.5,
+          189.0,
+          686.5,
+          234.0
+        ],
+        "confidence": 0.488,
+        "distanceMeters": 14.5
+      }
+    ],
+    "lanes": {
+      "currentLane": 1,
+      "laneCount": 1,
+      "laneBoundaries": [
+        [
+          [
+            -48.4,
+            538.5
+          ],
+          [
+            98.2,
+            457.5
+          ],
+          [
+            280.8,
+            358.5
+          ]
+        ],
+        [
+          [
+            1065.9,
+            538.5
+          ],
+          [
+            1051.3,
+            529.5
+          ],
+          [
+            1036.6,
+            520.5
+          ]
+        ]
+      ],
+      "confidence": 0.302
+    },
+    "road": {
+      "drivableCoverage": 0.0988,
+      "egoPathPolygon": [
+        [
+          -48.4,
+          538.5
+        ],
+        [
+          92.8,
+          460.5
+        ],
+        [
+          280.8,
+          358.5
+        ],
+        [
+          512.9,
+          358.5
+        ]
+      ],
+      "horizonY": 329.1,
+      "vanishingPoint": null,
+      "anchorPoints": [
+        {
+          "name": "ego_lane_center_near",
+          "xy": [
+            448.3,
+            507.1
+          ],
+          "groundXZ": [
+            -0.23,
+            4.03
+          ],
+          "valid": true
+        },
+        {
+          "name": "ego_lane_center_mid",
+          "xy": [
+            429.6,
+            454.7
+          ],
+          "groundXZ": [
+            -0.52,
+            5.65
+          ],
+          "valid": true
+        },
+        {
+          "name": "ego_lane_center_far",
+          "xy": [
+            412.0,
+            402.4
+          ],
+          "groundXZ": [
+            -1.21,
+            9.58
+          ],
+          "valid": true
+        }
+      ]
+    },
+    "blockAges": {
+      "detection": 0,
+      "tracking": 0,
+      "lights": 0,
+      "distance": 4,
+      "depth": 4,
+      "lanes": 4,
+      "signs": 4,
+      "road": 4
+    },
+    "timingsMs": {
+      "detect": 67.25,
+      "track": 17.42,
+      "trackStatic": 4.58,
+      "lights": 9.16,
+      "geometryDistance": 0.09,
+      "total": 98.59,
+      "queueWait": 33.43,
+      "jpegDecode": 1.99,
+      "fastLane": 98.71
+    },
+    "wave": 1,
+    "echo": {
+      "frameId": 30,
+      "captureTimeNs": 342386337532800
+    }
+  },
+  "perception.update": {
+    "type": "perception.update",
+    "schemaVersion": 2,
+    "wave": 2,
+    "seq": 0,
+    "sessionId": "video-b1ff4656-0435391e-20260926T032856-849e3d",
+    "frameIndex": 0,
+    "ptsSeconds": 0.0,
+    "echo": null,
+    "serverTimeMs": 1790411337230,
+    "processingMs": 361.4,
+    "camera": {
+      "focalPx": 700.0,
+      "principalPoint": [
+        640.0,
+        360.0
+      ],
+      "horizonY": 363.9,
+      "cameraHeightMeters": 1.31
+    },
+    "distances": [
+      {
+        "id": 1,
+        "distanceMeters": 5.02,
+        "distanceMethod": "fused",
+        "distanceConfidence": 0.798,
+        "lateralMeters": 2.36
+      },
+      {
+        "id": 2,
+        "distanceMeters": 9.5,
+        "distanceMethod": "fused",
+        "distanceConfidence": 0.791,
+        "lateralMeters": -7.84
+      },
+      {
+        "id": 3,
+        "distanceMeters": 5.41,
+        "distanceMethod": "fused",
+        "distanceConfidence": 0.827,
+        "lateralMeters": -1.11
+      }
+    ],
+    "lanes": {
+      "currentLane": 1,
+      "laneCount": 1,
+      "laneBoundaries": [
+        [
+          [
+            -95.5,
+            718.0
+          ],
+          [
+            238.0,
+            550.0
+          ],
+          [
+            304.4,
+            514.0
+          ]
+        ],
+        [
+          [
+            1514.4,
+            718.0
+          ],
+          [
+            1485.1,
+            706.0
+          ],
+          [
+            1455.9,
+            694.0
+          ]
+        ]
+      ],
+      "confidence": 0.512
+    },
+    "road": {
+      "drivableCoverage": 0.112,
+      "egoPathPolygon": [
+        [
+          -95.5,
+          718.0
+        ],
+        [
+          238.0,
+          550.0
+        ],
+        [
+          311.6,
+          510.0
+        ],
+        [
+          379.6,
+          470.0
+        ]
+      ],
+      "horizonY": 353.9,
+      "vanishingPoint": [
+        625.9,
+        353.9
+      ],
+      "anchorPoints": [
+        {
+          "name": "ego_lane_center_near",
+          "xy": [
+            696.9,
+            663.4
+          ],
+          "groundXZ": [
+            0.24,
+            2.95
+          ],
+          "valid": true
+        },
+        {
+          "name": "ego_lane_center_mid",
+          "xy": [
+            672.9,
+            572.4
+          ],
+          "groundXZ": [
+            0.2,
+            4.19
+          ],
+          "valid": true
+        },
+        {
+          "name": "ego_lane_center_far",
+          "xy": [
+            648.5,
+            481.3
+          ],
+          "groundXZ": [
+            0.09,
+            7.19
+          ],
+          "valid": true
+        }
+      ]
+    },
+    "blocks": [
+      "distance",
+      "depth",
+      "lanes"
+    ],
+    "timingsMs": {
+      "distance": 209.48,
+      "depthNet": 143.55,
+      "lanes": 61.37,
+      "total": 270.89
+    }
+  },
+  "perception.skip": {
+    "type": "perception.skip",
+    "frameId": 0,
+    "reason": "badHeader",
+    "sessionId": "live-ws-probe-20260926T033112-e5f768",
+    "serverTimeMs": 1790411472036
+  },
+  "client.trip_state": {
+    "type": "client.trip_state",
+    "timestampMs": 1790000000123,
+    "location": {
+      "lat": 33.7765228,
+      "lng": -84.3961545
+    },
+    "heading": 9.6,
+    "speedMps": 7.64,
+    "accuracyMeters": 4.1
+  },
+  "navigation.packet": {
+    "type": "navigation.packet",
+    "schemaVersion": 2,
+    "serverTimeMs": 1790000000000,
+    "ptsSeconds": 12.3,
+    "tripTimestampMs": 1730000012300,
+    "routeState": {
+      "action": "TURN_RIGHT",
+      "audio": "TURN RIGHT in 28 m.",
+      "ui": "TURN_ARROW",
+      "distanceMeters": 28,
+      "offRoute": false,
+      "etaSeconds": 27,
+      "remainingDistanceMeters": 208,
+      "requiredLane": null,
+      "turnDirection": "right",
+      "roadName": "Mock Street"
+    },
+    "packet": {
+      "packetType": "SPATIAL_NAVIGATION_PACKET",
+      "progress": {
+        "currentLocation": {
+          "lat": 33.7764204,
+          "lng": -84.3961717
+        },
+        "heading": 7.4,
+        "speedMps": 7.64,
+        "routeIndex": 0,
+        "distanceTraveledMeters": 92,
+        "remainingDistanceMeters": 208,
+        "etaSeconds": 27,
+        "offRoute": false
+      },
+      "activeManeuver": {
+        "eventId": "step_2",
+        "type": "TURN_RIGHT",
+        "distanceMeters": 120,
+        "roadName": "Mock Street",
+        "instruction": "Turn right onto the next road"
+      },
+      "...": "trimmed"
+    }
+  },
+  "perception.stats": {
+    "type": "perception.stats",
+    "schemaVersion": 2,
+    "sessionId": "video-b1ff4656-0435391e-20260926T032856-849e3d",
+    "serverTimeMs": 1790411356253,
+    "mode": "video",
+    "windowSeconds": 3.0,
+    "outputFps": 13.16,
+    "wave2Fps": 6.75,
+    "distanceFps": 6.75,
+    "sourceFps": 30.051,
+    "wave1ProcessingMs": {
+      "p50": 85.39,
+      "p95": 107.98
+    },
+    "wave2ProcessingMs": {
+      "p50": 270.11,
+      "p95": 321.85
+    },
+    "wave1ComputeMs": {
+      "p50": 73.31,
+      "p95": 92.2
+    },
+    "wave2ComputeMs": {
+      "p50": 142.76,
+      "p95": 186.0
+    },
+    "framesIn": 585,
+    "framesAnalysed": 246,
+    "framesSkipped": 0,
+    "updates": 123,
+    "clients": 1,
+    "sendDropped": 0,
+    "lookaheadSeconds": null,
+    "uptimeSeconds": 56.1,
+    "framesDropped": 337,
+    "uplinkClient": null
+  },
+  "client.playback (sim)": {
+    "type": "client.playback",
+    "videoId": "b1ff4656-0435391e",
+    "ptsSeconds": 5.0831,
+    "playing": true,
+    "rate": 1.0,
+    "clientTimeNs": 342403897769400
+  }
+}

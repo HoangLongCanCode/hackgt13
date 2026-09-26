@@ -14,6 +14,15 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "1.0.0"
+
+        // Perception bridge defaults (PERCEPTION_INTEGRATION.md). Override per build with
+        // -Pksr.source=LIVE -Pksr.url=ws://... or per launch with intent extras (ksr.source, ksr.url, ...).
+        fun ksr(name: String, default: String) = (project.findProperty(name) as String?) ?: default
+        buildConfigField("String", "KSR_SOURCE", "\"${ksr("ksr.source", "MOCK")}\"")
+        buildConfigField("String", "KSR_SERVER_URL", "\"${ksr("ksr.url", "ws://127.0.0.1:8765/perception")}\"")
+        buildConfigField("String", "KSR_SIM_VIDEO_ID", "\"${ksr("ksr.simVideoId", "b1ff4656-0435391e")}\"")
+        buildConfigField("double", "KSR_MOUNT_HEIGHT_M", ksr("ksr.mountHeight", "1.25"))
+        buildConfigField("boolean", "KSR_NAV_ENABLED", ksr("ksr.nav", "true"))
     }
 
     buildTypes {
@@ -37,6 +46,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 
@@ -63,4 +73,13 @@ dependencies {
     implementation("androidx.camera:camera-view:$camerax")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+
+    // Perception bridge to the laptop (pure-JVM module) + SIM mode video player.
+    implementation(project(":perception-bridge"))
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    val media3 = "1.5.1"
+    implementation("androidx.media3:media3-exoplayer:$media3")
+    implementation("androidx.media3:media3-ui:$media3")
+
+    testImplementation("junit:junit:4.13.2")
 }

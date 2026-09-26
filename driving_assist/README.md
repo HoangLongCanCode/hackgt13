@@ -37,3 +37,15 @@ app/src/main/java/com/drivingassist/glass/
 ```
 
 Build from the command line with `gradlew.bat :app:assembleDebug` on Windows.
+
+## Perception bridge
+
+With one switch the app can also show real results from the laptop instead of the mocks. `MOCK` is the default and behaves exactly as described above (a plain launch, e.g. Android Studio Run, is always the build default). `LIVE` uplinks the tablet camera to the laptop's perception models. `SIM` plays the same clip on both devices. In `LIVE` and `SIM`, `RouteState` comes from the phase1 route engine via the laptop, and a small status chip appears bottom-left. Switch per launch (that launch only):
+
+```bash
+adb shell am start -S -n com.drivingassist.glass/.MainActivity --es ksr.source live   # or sim / mock
+adb shell am start -S -n com.drivingassist.glass/.MainActivity --es ksr.source live --ez ksr.persist true   # keep it for later launches
+adb shell am start -S -n com.drivingassist.glass/.MainActivity --ez ksr.reset true    # forget kept values (back to MOCK)
+```
+
+The code lives in `perception-bridge/` (pure Kotlin protocol client), `bridge-cli/` (a JVM fake tablet) and `app/.../glass/perception/`. See [PERCEPTION_INTEGRATION.md](PERCEPTION_INTEGRATION.md) for what changed in the files above, the data mapping, and the laptop and adb commands.

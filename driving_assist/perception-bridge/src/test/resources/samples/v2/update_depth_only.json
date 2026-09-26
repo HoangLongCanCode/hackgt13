@@ -1,0 +1,1 @@
+{"type":"perception.update","schemaVersion":2,"wave":2,"seq":4712,"frameIndex":303,"ptsSeconds":10.1,"echo":null,"processingMs":48.0,"distances":[{"id":17,"distanceMeters":18.1,"distanceMethod":"depth_model","distanceConfidence":0.6,"lateralMeters":null}],"blocks":["depth"],"timingsMs":{"depth":43.0}}

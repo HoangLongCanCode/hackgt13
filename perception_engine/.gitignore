@@ -1,0 +1,20 @@
+# Large / machine-local artifacts: never commit (SETUP.md: scripts/setup_env.ps1, download_models.py,
+# fetch_third_party.py and fetch_bdd_samples.py recreate them)
+/models/
+/data/
+/outputs/
+/perception/third_party/
+/.venv/
+/.cache/
+/tools/android-sdk/
+__pycache__/
+*.pyc
+*.onnx
+*.pt
+*.pth
+*.engine
+*.safetensors
+*.mov
+*.mp4
+*.log
+.env

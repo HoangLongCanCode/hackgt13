@@ -1,0 +1,67 @@
+{
+  "routeId": "demo_b1ff4656-0435391e_mock",
+  "provider": "mock",
+  "routeApiVersion": "mock-v1",
+  "origin": {
+    "lat": 33.7756,
+    "lng": -84.3963
+  },
+  "destination": {
+    "label": "Piedmont Park",
+    "placeId": "mock_2319954122",
+    "coordinate": {
+      "lat": 33.778319999999994,
+      "lng": -84.39576
+    }
+  },
+  "polyline": "",
+  "geometry": [
+    {
+      "lat": 33.7756,
+      "lng": -84.3963
+    },
+    {
+      "lat": 33.7764976,
+      "lng": -84.39615959999999
+    },
+    {
+      "lat": 33.7774496,
+      "lng": -84.39596519999999
+    },
+    {
+      "lat": 33.778319999999994,
+      "lng": -84.39576
+    }
+  ],
+  "steps": [
+    {
+      "stepId": "step_1",
+      "instruction": "Continue on the current road",
+      "maneuver": "straight",
+      "distanceMeters": 120,
+      "durationSeconds": 20,
+      "roadName": "Mock Avenue"
+    },
+    {
+      "stepId": "step_2",
+      "instruction": "Turn right onto the next road",
+      "maneuver": "right",
+      "distanceMeters": 180,
+      "durationSeconds": 30,
+      "roadName": "Mock Street"
+    },
+    {
+      "stepId": "step_3",
+      "instruction": "Arrive at Piedmont Park",
+      "maneuver": "arrive",
+      "distanceMeters": 0,
+      "durationSeconds": 0,
+      "roadName": "Piedmont Park"
+    }
+  ],
+  "totalDistanceMeters": 300,
+  "totalDurationSeconds": 50,
+  "highwayName": null,
+  "createdAtMs": 1730000000000,
+  "originLabel": "Origin"
+}

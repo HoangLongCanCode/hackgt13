@@ -1,0 +1,48 @@
+# SIM + phase1 sim navigation, city clip b1ff4656-0435391e, fake tablet (bridge-cli) on the laptop, 2026-09-26
+# server (perception_engine/): python -m perception.realtime.server --mode sim --port 8770 \
+#     --nav-session nav/demo_sessions/b1ff4656-0435391e --phase1-dir <phase1 checkout>
+# tablet (driving_assist/):    bridge-cli sim --video-id b1ff4656-0435391e --url ws://127.0.0.1:8770/perception --seconds 31
+# 'route' = navigation.packet.routeState relayed from the phase1 route engine; lane/lead/light/seen = perception
+# (wave 1 + wave 2 merged in the Kotlin WorldModel); guide/alert/EVENT = Kotlin DrivingContextEngine.
+
+KSR fake tablet - sim mode -> ws://127.0.0.1:8770/perception (client fake-tablet-jvm, navigation hint sim)
+...
+---- SIM pts=15.17s playing x1.0 | result pts 15.15 (21 ms behind playback) | results arrived early by p50 384 ms (min 232), late 2 | buffered 32
+     [CONNECTED] res 13.0 fps (wave2 7.0/s) | rtt 1.6 ms | nav packets 30
+  lane   1/1 (conf 0.18, age 0.17s, 1 lines)   road coverage 0.14
+  lead   #2 car 12.3 m (age 0.17 s)  ttc --  rel 0.3 m/s  -> CLOSE
+  light  #1000063 GREEN 24 m   pedestrians in path: #55 11 m
+  seen   car 10, pedestrian 1  (tracks held: 21)   wave2 seq 165 lag 167 ms [distance,depth,lanes]
+  route  TURN_RIGHT "TURN RIGHT in 9 m." ui=TURN_ARROW  9 m  eta 25 s  (#30, age 0.4 s)
+  guide  USE RIGHT LANE | TURN RIGHT | MOCK STREET 10 m  [IMMEDIATE_NAVIGATION]
+  alert  PEDESTRIAN 11 m  (PEDESTRIAN | 11 m)  [CRITICAL_SAFETY]
+  EVENT  [CRITICAL_SAFETY] PEDESTRIAN_IN_PATH  "PEDESTRIAN | 12 m"  voice: "Pedestrian ahead."  @14.75s
+---- SIM pts=15.68s playing x1.0 | result pts 15.65 (33 ms behind playback) | results arrived early by p50 363 ms (min 196), late 2 | buffered 30
+     [CONNECTED] res 13.0 fps (wave2 7.5/s) | rtt 1.1 ms | nav packets 31
+  lane   1/1 (conf 0.19, age 0.20s, 1 lines)   road coverage 0.16
+  lead   #2 car 12.5 m (age 0.20 s)  ttc --  rel 0.4 m/s  -> CLOSE
+  light  #1000067 YELLOW 24 m
+  seen   car 14, pedestrian 1  (tracks held: 19)   wave2 seq 171 lag 133 ms [distance,depth,lanes,signs]
+  route  TURN_RIGHT "TURN RIGHT in 5 m." ui=TURN_ARROW  5 m  eta 24 s  (#31, age 0.3 s)
+  guide  USE RIGHT LANE | TURN RIGHT | MOCK STREET 10 m  [IMMEDIATE_NAVIGATION]
+  alert  CLOSE 12 m  (CAR | 12.5 m)  [TRAFFIC_ALERT]
+  EVENT  [TRAFFIC_ALERT] TRAFFIC_LIGHT_YELLOW  "YELLOW | 24 m"  voice: "Yellow light."  @15.58s
+---- SIM pts=16.19s playing x1.0 | result pts 16.11 (73 ms behind playback) | results arrived early by p50 351 ms (min 196), late 2 | buffered 29
+     [CONNECTED] res 13.0 fps (wave2 7.0/s) | rtt 1.1 ms | nav packets 32
+  lane   1/1 (conf 0.19, age 0.17s, 1 lines)   road coverage 0.16
+  lead   #2 car 13.0 m (age 0.17 s)  ttc --  rel 0.6 m/s  -> CLOSE
+  light  #1000069 GREEN 20 m
+  seen   car 10, traffic light 1, pedestrian 1  (tracks held: 21)   wave2 seq 178 lag 167 ms [distance,depth,lanes,signs]
+  route  TURN_RIGHT "TURN RIGHT in 1 m." ui=TURN_ARROW  1 m  eta 24 s  (#32, age 0.3 s)
+  guide  USE RIGHT LANE | TURN RIGHT | MOCK STREET 0 m  [IMMEDIATE_NAVIGATION]
+  alert  CLOSE 13 m  (CAR | 13.0 m)  [TRAFFIC_ALERT]
+  EVENT  [GENERAL_INFORMATION] TRAFFIC_LIGHT_GREEN  "GREEN | 22 m"  voice: "Light is green."  @16.05s
+---- SIM pts=16.69s playing x1.0 | result pts 16.68 (10 ms behind playback) | results arrived early by p50 338 ms (min 186), late 2 | buffered 29
+     [CONNECTED] res 13.0 fps (wave2 7.0/s) | rtt 1.1 ms | nav packets 33
+  lane   1/1 (conf 0.20, age 0.10s, 1 lines)   road coverage 0.17
+  lead   #2 car 12.9 m (age 0.10 s)  ttc --  rel 0.4 m/s  -> CLOSE
+  light  #1000069 GREEN 22 m
+  seen   car 11, pedestrian 1  (tracks held: 25)   wave2 seq 186 lag 102 ms [distance,depth,lanes,signs]
+  route  ARRIVE "You have arrived at your destination." ui=WARNING  177 m  eta 23 s  (#33, age 0.3 s)
+  alert  CLOSE 13 m  (CAR | 12.9 m)  [TRAFFIC_ALERT]
+  EVENT  [IMMEDIATE_NAVIGATION] ARRIVE  "ARRIVE | PIEDMONT PARK 180 m"  voice: "You have arrived at your destination."  @16.41s

@@ -1,0 +1,25 @@
+{
+  "type": "client.hello",
+  "protocolVersion": 2,
+  "clientId": "ws-probe",
+  "device": {
+    "manufacturer": "ksr",
+    "model": "ws_probe",
+    "osVersion": "win32"
+  },
+  "mode": "live",
+  "camera": {
+    "imageWidth": 960,
+    "imageHeight": 540,
+    "focalPx": 525.0,
+    "principalPoint": [
+      480.0,
+      270.0
+    ],
+    "mountHeightMeters": 1.3,
+    "pitchDegrees": null,
+    "lensFacing": "back",
+    "stabilization": false
+  },
+  "sim": null
+}

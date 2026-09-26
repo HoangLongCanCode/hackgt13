@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ksr.local/contracts/schemas/perception.pong.schema.json",
+  "title": "perception.pong (protocol v2)",
+  "description": "Server -> client answer to client.ping; clientTimeNs is echoed so the client measures RTT on its own clock.",
+  "type": "object",
+  "required": [
+    "type",
+    "clientTimeNs",
+    "serverTimeMs"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "type": {
+      "const": "perception.pong"
+    },
+    "clientTimeNs": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "serverTimeMs": {
+      "type": "integer",
+      "description": "Unix epoch ms on the laptop when the message was built."
+    }
+  }
+}

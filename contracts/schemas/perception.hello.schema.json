@@ -1,0 +1,352 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ksr.local/contracts/schemas/perception.hello.schema.json",
+  "title": "perception.hello (protocol v2)",
+  "description": "Server -> client: on connect, after every client.hello, and whenever a new session starts (video loop, sim seek, new controller, image size change). A client clears its per-session state (track ids, sim result buffer) when sessionId changes, and its LinkStatus.serverError on any hello. Produced by perception_engine/perception/realtime/wire.py make_hello().",
+  "type": "object",
+  "required": [
+    "type",
+    "protocolVersion",
+    "schemaVersion",
+    "sessionId",
+    "serverTimeMs",
+    "mode",
+    "acceptedModes",
+    "source",
+    "image",
+    "camera",
+    "classes",
+    "staticIdOffset",
+    "uplink",
+    "sim",
+    "schedule",
+    "models",
+    "navigation"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "type": {
+      "const": "perception.hello"
+    },
+    "protocolVersion": {
+      "const": 2
+    },
+    "schemaVersion": {
+      "const": 2
+    },
+    "sessionId": {
+      "type": "string",
+      "description": "'idle' while a live / sim server has no controlling client."
+    },
+    "serverTimeMs": {
+      "type": "integer",
+      "description": "Unix epoch ms on the laptop when the message was built."
+    },
+    "mode": {
+      "enum": [
+        "video",
+        "live",
+        "sim"
+      ],
+      "description": "Mode of the current session; while idle, the server's first accepted mode (live for --mode auto / live, sim for --mode sim)."
+    },
+    "acceptedModes": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "video",
+          "live",
+          "sim"
+        ]
+      },
+      "description": "Modes a client.hello may ask for."
+    },
+    "role": {
+      "enum": [
+        "controller",
+        "watcher",
+        null
+      ],
+      "description": "This client's role: the controller uplinks frames (live) / reports playback (sim); everyone receives the results."
+    },
+    "source": {
+      "$ref": "#/$defs/source"
+    },
+    "sourceFps": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "description": "Clip frame rate (video / sim)."
+    },
+    "targetHz": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "description": "Expected analysed-frame rate the trackers are sized for."
+    },
+    "image": {
+      "$ref": "#/$defs/image"
+    },
+    "camera": {
+      "$ref": "#/$defs/camera"
+    },
+    "classes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "staticIdOffset": {
+      "type": "integer",
+      "description": "Traffic light / sign track ids start here."
+    },
+    "uplink": {
+      "description": "Live camera uplink parameters (null when this server takes no camera frames).",
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "maxInFlight",
+            "preferredWidth",
+            "preferredHeight",
+            "jpegQuality",
+            "header"
+          ],
+          "properties": {
+            "maxInFlight": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Frames the client may have without a wave-1 answer (perception.frame with matching echo, or perception.skip)."
+            },
+            "preferredWidth": {
+              "type": "integer"
+            },
+            "preferredHeight": {
+              "type": "integer"
+            },
+            "jpegQuality": {
+              "type": "integer"
+            },
+            "header": {
+              "const": "KSR1"
+            }
+          }
+        }
+      ]
+    },
+    "sim": {
+      "description": "Sim parameters (null when the server does not accept sim).",
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "lookaheadSeconds",
+            "videos"
+          ],
+          "properties": {
+            "lookaheadSeconds": {
+              "type": "number",
+              "description": "How far ahead of the reported playback position the laptop currently analyses, in media seconds."
+            },
+            "lookaheadMode": {
+              "enum": [
+                "auto",
+                "fixed"
+              ]
+            },
+            "videos": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "videoIds (clip stems) the laptop has."
+            },
+            "videoId": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Clip of the current sim session."
+            }
+          }
+        }
+      ]
+    },
+    "schedule": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "lane",
+          "every",
+          "phase"
+        ],
+        "properties": {
+          "lane": {
+            "enum": [
+              "fast",
+              "slow",
+              "serial"
+            ]
+          },
+          "every": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "phase": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "description": "Blocks per lane. fast: every analysed frame; slow: every n-th slow-lane cycle."
+    },
+    "models": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "block",
+          "name"
+        ],
+        "properties": {
+          "block": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "licence": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "server": {
+      "type": "object",
+      "description": "Free-form server settings (modeArg, port, maxInFlight, ...)."
+    },
+    "navigation": {
+      "type": "object",
+      "required": [
+        "mode",
+        "available"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "enum": [
+            "sim",
+            "live",
+            "off"
+          ]
+        },
+        "available": {
+          "type": "boolean"
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "description": "phase1 route-engine relay state; navigation.packet messages follow when available."
+    },
+    "safety": {
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "point": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      },
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "source": {
+      "type": "object",
+      "required": [
+        "kind",
+        "id"
+      ],
+      "additionalProperties": false,
+      "description": "video / sim: kind 'video', id = clip stem (videoId); live: kind 'camera', id = clientId.",
+      "properties": {
+        "kind": {
+          "enum": [
+            "video",
+            "camera",
+            "replay"
+          ]
+        },
+        "id": {
+          "type": "string"
+        }
+      }
+    },
+    "image": {
+      "type": "object",
+      "required": [
+        "width",
+        "height"
+      ],
+      "additionalProperties": false,
+      "description": "Coordinate space of every bbox / lane / road point: the upright analysed image (live: the uplinked JPEG after rotationDegrees, scaled down only if wider than the server's input.max_width, 1280; video / sim: the clip frame). Normalise by these to map onto the display.",
+      "properties": {
+        "width": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "camera": {
+      "type": "object",
+      "required": [
+        "focalPx",
+        "principalPoint"
+      ],
+      "additionalProperties": false,
+      "description": "Pinhole camera of the session in `image` pixels: client.hello intrinsics (live) or defaults (BDD 700 px focal at 1280 wide); horizonY / cameraHeightMeters are the depth block's current estimates (a client-given mountHeightMeters is used as is).",
+      "properties": {
+        "focalPx": {
+          "type": "number"
+        },
+        "principalPoint": {
+          "$ref": "#/$defs/point"
+        },
+        "horizonY": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "cameraHeightMeters": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      }
+    }
+  }
+}

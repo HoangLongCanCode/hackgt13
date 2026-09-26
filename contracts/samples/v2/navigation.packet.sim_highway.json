@@ -1,0 +1,129 @@
+{
+  "type": "navigation.packet",
+  "schemaVersion": 2,
+  "serverTimeMs": 1790000000000,
+  "ptsSeconds": 20,
+  "tripTimestampMs": 1730000020000,
+  "routeState": {
+    "action": "ARRIVE",
+    "audio": "You have arrived at your destination.",
+    "ui": "WARNING",
+    "distanceMeters": 505,
+    "offRoute": false,
+    "etaSeconds": 21,
+    "remainingDistanceMeters": 505,
+    "requiredLane": null,
+    "turnDirection": "straight",
+    "roadName": "Amtrak station in Atlanta"
+  },
+  "packet": {
+    "packetType": "SPATIAL_NAVIGATION_PACKET",
+    "tripId": "demo_b1f4491b-cf446195",
+    "routeId": "demo_b1f4491b-cf446195_mock",
+    "generatedAtMs": 1730000019539,
+    "source": {
+      "provider": "mock",
+      "routeApiVersion": "mock-v1"
+    },
+    "destination": {
+      "label": "Amtrak station in Atlanta",
+      "placeId": "mock_3505564144",
+      "coordinate": {
+        "lat": 33.78254,
+        "lng": -84.40287
+      }
+    },
+    "progress": {
+      "currentLocation": {
+        "lat": 33.7791526,
+        "lng": -84.3992375
+      },
+      "heading": 321,
+      "speedMps": 24.58,
+      "routeIndex": 1,
+      "distanceTraveledMeters": 480,
+      "remainingDistanceMeters": 505,
+      "etaSeconds": 21,
+      "offRoute": false
+    },
+    "route": {
+      "polyline": "",
+      "steps": [
+        {
+          "stepId": "step_1",
+          "instruction": "Continue on the current road",
+          "maneuver": "straight",
+          "distanceMeters": 394,
+          "durationSeconds": 66,
+          "roadName": "Mock Avenue"
+        },
+        {
+          "stepId": "step_2",
+          "instruction": "Turn right onto the next road",
+          "maneuver": "right",
+          "distanceMeters": 591,
+          "durationSeconds": 99,
+          "roadName": "Mock Street"
+        },
+        {
+          "stepId": "step_3",
+          "instruction": "Arrive at Amtrak station in Atlanta",
+          "maneuver": "arrive",
+          "distanceMeters": 0,
+          "durationSeconds": 0,
+          "roadName": "Amtrak station in Atlanta"
+        }
+      ],
+      "totalDistanceMeters": 985,
+      "totalDurationSeconds": 165
+    },
+    "activeManeuver": {
+      "eventId": "step_3",
+      "type": "ARRIVE",
+      "distanceMeters": 985,
+      "roadName": "Amtrak station in Atlanta",
+      "instruction": "Arrive at Amtrak station in Atlanta"
+    },
+    "upcomingManeuvers": [
+      {
+        "eventId": "step_3",
+        "type": "ARRIVE",
+        "distanceMeters": 985,
+        "roadName": "Amtrak station in Atlanta",
+        "instruction": "Arrive at Amtrak station in Atlanta",
+        "priority": 1
+      }
+    ],
+    "spatialInstructions": [
+      {
+        "id": "spatial_step_3",
+        "type": "WARNING",
+        "anchor": {
+          "kind": "ROUTE_POINT",
+          "routeDistanceMeters": 985
+        },
+        "content": "ARRIVE",
+        "priority": 3,
+        "lifetimeMs": 8000
+      }
+    ],
+    "audioInstructions": [
+      {
+        "id": "audio_step_3",
+        "content": "You have arrived at your destination.",
+        "priority": 3,
+        "speakAtDistanceMeters": 985
+      }
+    ],
+    "routeSemantics": {
+      "roadName": "Amtrak station in Atlanta",
+      "highwayName": "I-75/85 (synthetic)",
+      "turnDirection": "straight"
+    },
+    "handoffHints": {
+      "confidence": 0.95,
+      "displayPriority": 3,
+      "staleAfterMs": 5000
+    }
+  }
+}

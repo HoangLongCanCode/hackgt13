@@ -1,0 +1,14 @@
+KSR1 camera-frame uplink header (contracts/PROTOCOL_v2.md): one binary WebSocket message = these 24
+bytes (little-endian, Python struct '<4sHHIqHH') followed by the JPEG. Captured from ws_probe live;
+the JPEG that followed was 60965 bytes (960x540, quality 80).
+
+hex (24 bytes): 4b 53 52 31 01 00 00 00 01 00 00 00 14 d8 ea d0 65 37 01 00 00 00 00 00
+
+offset  size  field            type           bytes                    value
+     0     4  magic            4 bytes ASCII  4b 53 52 31              KSR1
+     4     2  headerVersion    uint16 LE      01 00                    1
+     6     2  flags            uint16 LE      00 00                    0
+     8     4  frameId          uint32 LE      01 00 00 00              1
+    12     8  captureTimeNs    int64 LE       14 d8 ea d0 65 37 01 00  342385412986900
+    20     2  rotationDegrees  uint16 LE      00 00                    0
+    22     2  reserved         uint16 LE      00 00                    0

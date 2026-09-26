@@ -2,6 +2,7 @@ package com.drivingassist.glass
 
 import androidx.camera.core.ImageAnalysis
 import androidx.lifecycle.ViewModel
+import com.drivingassist.glass.perception.RouteSource
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -16,9 +17,14 @@ import kotlinx.coroutines.launch
  *
  * ENGINEER A SWAP: replace [MockVisionSource] with the OpenCV implementation.
  * If that class implements [ImageAnalysis.Analyzer], camera frames are delivered automatically.
+ *
+ * PERCEPTION BRIDGE (PERCEPTION_INTEGRATION.md): `perception.PerceptionFactory` passes the laptop
+ * vision source and, with navigation on, a [RouteSource] (phase1 via the laptop). When [routeSource]
+ * is null (MOCK, or navigation off) the 5 s route loop below runs unchanged.
  */
 class MockDataViewModel @JvmOverloads constructor(
-    private val visionSource: VisionSource = MockVisionSource(),
+    val visionSource: VisionSource = MockVisionSource(),
+    private val routeSource: RouteSource? = null,
 ) : ViewModel() {
 
     val visionData: StateFlow<VisionData> = visionSource.visionData
@@ -39,13 +45,17 @@ class MockDataViewModel @JvmOverloads constructor(
 
     init {
         visionSource.start()
-        viewModelScope.launch {
-            var index = 0
-            while (isActive) {
-                _routeState.value = routeScript[index].toState(nowSeconds())
-                index = (index + 1) % routeScript.size
-                delay(5_000)
+        if (routeSource == null) {
+            viewModelScope.launch {
+                var index = 0
+                while (isActive) {
+                    _routeState.value = routeScript[index].toState(nowSeconds())
+                    index = (index + 1) % routeScript.size
+                    delay(5_000)
+                }
             }
+        } else {
+            viewModelScope.launch { routeSource.routeState.collect { _routeState.value = it } }
         }
     }
 
