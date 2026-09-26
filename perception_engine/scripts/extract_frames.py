@@ -1,5 +1,5 @@
 """Extract JPEG frames from a clip for the fake tablet,
-`bridge-cli live --frames DIR` (perception_engine/android/bridge-cli, built from driving_assist/).
+`bridge-cli live --frames DIR` (perception_engine/android/bridge-cli, built from frontend/).
 
 bridge-cli uplinks these frames through the Kotlin PerceptionBridge exactly as the Galaxy Tab S9 camera
 would (960x540, JPEG quality ~80 = the PROTOCOL_v2 recommendation).
@@ -7,7 +7,7 @@ would (960x540, JPEG quality ~80 = the PROTOCOL_v2 recommendation).
     .venv\\Scripts\\python.exe scripts\\extract_frames.py b1ff4656-0435391e --fps 15 --seconds 30   # from perception_engine/
 
 Writes outputs\\e2e\\frames_<clip>\\frame_000000.jpg ... plus meta.json (PERCEPTION_OUTPUTS_DIR overrides outputs\\;
-docs/RUNBOOK.md uses --out outputs\\e2e\\frames_b1ff4656_960x540).
+--out DIR writes elsewhere; docs/RUNBOOK.md uses the default).
 `clip` is a path, or a stem looked up in data\\bdd100k\\videos\\val\\<stem>.mov (PERCEPTION_DATA_DIR overrides data\\).
 """
 from __future__ import annotations

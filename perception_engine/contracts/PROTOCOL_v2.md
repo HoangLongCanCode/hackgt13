@@ -2,7 +2,7 @@
 
 Status: source of truth for the bridge. Supersedes the v1 message list in `README.md` (v1 `perception.frame` fields are kept; v2 adds fields and messages).
 
-Target client: Samsung Galaxy Tab S9 (any Samsung Android device works the same), Kotlin app written by the AR developer. The tablet does all I/O (camera, display, audio, GPS/navigation, Driving Context); the laptop (RTX 5060) only runs the models.
+Target client: Samsung Galaxy Tab S9 (any Samsung Android device works the same), the Kotlin tablet app in `frontend/` (through the shared `PerceptionBridge`). The tablet does all I/O (camera, display, audio, GPS/navigation, Driving Context); the laptop (RTX 5060) only runs the models.
 
 ## Transport
 
@@ -65,7 +65,7 @@ Target client: Samsung Galaxy Tab S9 (any Samsung Android device works the same)
 | 20 | uint16 | rotationDegrees (0/90/180/270: rotate the JPEG clockwise by this to make it upright) |
 | 22 | uint16 | reserved (0) |
 
-Python: `struct.Struct("<4sHHIqHH")`. Recommended: 960×540, JPEG quality ~80 (≈50–80 KB).
+Python: `struct.Struct("<4sHHIqHH")`. Recommended: 960×540, JPEG quality ~80 (≈50–80 KB). An upright frame wider than 1280 px (`input.max_width` in `config_realtime.yaml`) is scaled down on the server, keeping its aspect, and the `client.hello` intrinsics are scaled with it; `image.width/height` and all coordinates then refer to the scaled image.
 
 A binary message of 24 bytes or more is always answered, even with a wrong magic: the server reads `frameId` at offset 8 and answers `perception.skip badHeader` (bad magic / headerVersion / rotation) or `decodeError` (empty or undecodable JPEG). A message shorter than 24 bytes cannot be attributed to a frame: it gets only a rate-limited `perception.error badMessage`, and the client's credit comes back by its timeout.
 
@@ -87,7 +87,7 @@ All v1 fields (see `perception_frame.v1.schema.json`), with `schemaVersion: 2` p
 - per object: `"distanceAgeMs"`: age of the carried-forward distance (null if none). Wave 1 includes the latest known distance/lanes/road so a client that ignores wave 2 still works.
 - Coordinates (`bbox`, lanes, road, `image.width/height`) are in the **upright** image, i.e. after applying the uplink `rotationDegrees`; `client.hello.camera` intrinsics describe that upright image too.
 - `lanes` and `road` are always present (null when unknown). `timingsMs` may include `queueWait`, `jpegDecode`, `fastLane`, `geometryDistance`.
-- `distanceMethod`: `fused` / `depth_model` (slow lane, carried with `distanceAgeMs`); `geometry` (fast-lane size prior + flat ground on this very frame, age 0, confidence ≤ 0.5, used when no slow-lane distance younger than 1 s exists); `size_prior` (traffic lights and signs).
+- `distanceMethod`: `fused` / `depth_model` / `ground_plane` / `width_prior` (slow lane: the fusion of the depth network, flat-ground range and class size prior, or the one component that was available; carried with `distanceAgeMs`); `geometry` (fast-lane size prior + flat ground on this very frame, age 0, confidence ≤ 0.5, used when no slow-lane distance younger than 1 s exists); `size_prior` (traffic lights and signs).
 - `inEgoPath` (vehicles, pedestrians): the box bottom (at 1/4, 1/2 or 3/4 of its width) lies inside the ego **vehicle's** corridor. That corridor is ±1.3 m on flat ground around the ego heading (the ego lane direction from the lanes block's `ego_lane_center_near/far` anchors, clamped to ±8°; the camera axis without them), up to 80 m ahead. The server falls back to the ego-lane / static polygon only when the camera height or horizon is unknown. (The ego-lane polygon alone included parking lanes and ended about 5 m ahead, which made parked cars "leads"; fixed 2026-09-26.) The Kotlin Driving Context picks the lead vehicle and pedestrians-in-path from this flag.
 - `live`: `ptsSeconds` must advance in real time with the tablet's capture clock: `(captureTimeNs − first captureTimeNs of the session) / 1e9` (the client's relative speed / TTC / box-velocity maths runs on `ptsSeconds`).
 
@@ -99,12 +99,12 @@ All v1 fields (see `perception_frame.v1.schema.json`), with `schemaVersion: 2` p
   "distances": [ { "id": 17, "distanceMeters": 18.4, "distanceMethod": "fused", "distanceConfidence": 0.8, "lateralMeters": -0.3 } ],
   "lanes": { "currentLane": 2, "laneCount": 3, "laneBoundaries": [[[x, y], "..."]], "confidence": 0.7 },
   "road": { "drivableCoverage": 0.31, "egoPathPolygon": [[x, y]], "horizonY": 262.0, "vanishingPoint": [640, 262], "anchorPoints": [] },
-  "signs": [], "blocks": ["depth", "lanes"], "timingsMs": { "depth": 44.1, "lanes": 14.9 } }
+  "signs": [], "blocks": ["distance", "depth", "lanes"], "timingsMs": { "distance": 58.3, "depthNet": 44.1, "lanes": 14.9, "total": 75.2 } }
 ```
-`seq`/`frameIndex`/`ptsSeconds`/`echo` identify the frame the slow blocks analysed (usually a few frames older than the latest wave 1). Fields for blocks that did not run are omitted. Track ids match wave-1 `objects[].id`. Also carries `sessionId` and `camera`; `blocks` ⊆ `distance`, `depth`, `lanes`, `segmentation`, `signs`.
+`seq`/`frameIndex`/`ptsSeconds`/`echo` identify the frame the slow blocks analysed (usually a few frames older than the latest wave 1). Fields for blocks that did not run are omitted. Track ids match wave-1 `objects[].id`. Also carries `sessionId` and `camera`; `blocks` ⊆ `distance`, `depth`, `lanes`, `segmentation`, `signs`. `distance` is in every update while the distance block is enabled (the default: the per-track distance update runs every slow cycle); `depth` only when the depth network itself ran. `timingsMs` keys are per block (`distance`, `depthNet` for the network alone, `lanes`, `signs`, ...) plus `total`.
 
 ### `perception.skip` (live) — a frame will not be analysed (superseded by a newer one)
-`{ "type": "perception.skip", "frameId": 1233, "reason": "superseded" }` — reasons: `superseded`, `decodeError`, `badHeader`, `notAccepted`, `sessionReset`; every reason returns the frame's credit. Also carries `sessionId` and `serverTimeMs`. `superseded` is also sent when a finished result is replaced in the client's 1-slot send queue, and `notAccepted` when the fast lane failed on that frame (plus a `perception.error internal`), so the exactly-one-answer rule holds end to end.
+`{ "type": "perception.skip", "frameId": 1233, "reason": "superseded" }` — reasons: `superseded`, `decodeError`, `badHeader`, `notAccepted`, `sessionReset`; every reason returns the frame's credit. Also carries `sessionId` and `serverTimeMs`. `superseded` is also sent when a finished result is replaced in the client's 1-slot send queue. `notAccepted` is sent when the server does not accept live (plus `perception.error modeNotAvailable`), to the controller of a sim session (plus `badMessage`: send a live `client.hello` first), to a client that is not the controller (plus `notUplinkClient`), after a takeover (see Sessions), and when the fast lane failed on that frame (plus a `perception.error internal`), so the exactly-one-answer rule holds end to end.
 
 ### `perception.stats` (~1 Hz)
 `{ "type": "perception.stats", "outputFps", "wave1ProcessingMs": {"p50","p95"}, "wave2ProcessingMs": {"p50","p95"}, "framesIn", "framesAnalysed", "framesSkipped", "clients" }` plus diagnostics (optional for clients): `schemaVersion`, `sessionId`, `serverTimeMs`, `mode`, `windowSeconds`, `wave2Fps`, `distanceFps`, `sourceFps`, `wave1ComputeMs` / `wave2ComputeMs` (`{p50, p95}`, compute only, without queueing), `updates`, `sendDropped`, `framesDropped`, `lookaheadSeconds`, `simLeadMs` (`{p5, p50}`, wall ms), `simLateFraction`, `uplinkClient`, `navigationPackets`, `uptimeSeconds`.
@@ -133,7 +133,7 @@ The phase1 Node.js navigation engine computes `SpatialNavigationPacket`s. It is 
                   "requiredLane": null, "turnDirection": "right", "roadName": "North Ave" },
   "packet": { "packetType": "SPATIAL_NAVIGATION_PACKET", "...": "verbatim phase1 SpatialNavigationPacket" } }
 ```
-- `routeState.action` = phase1 `activeManeuver.type` (`GO_STRAIGHT`, `TURN_LEFT`, `TURN_RIGHT`, `KEEP_LEFT`, `KEEP_RIGHT`, `MERGE`, `EXIT_HIGHWAY`, `ARRIVE`, `START_ROUTE`); `audio` = `audioInstructions[0].content`; `ui` = `spatialInstructions[0].type`; these map 1:1 onto the AR app's `RouteState(time, action, audio, ui)`. `ptsSeconds` is null in live mode.
+- `routeState.action` = phase1 `activeManeuver.type` (`GO_STRAIGHT`, `TURN_LEFT`, `TURN_RIGHT`, `KEEP_LEFT`, `KEEP_RIGHT`, `MERGE`, `EXIT_HIGHWAY`, `ARRIVE`, `START_ROUTE`); `audio` = `audioInstructions[0].content`; `ui` = `spatialInstructions[0].type`; the tablet app reads these (through the bridge's `NavigationMapper`) into its route guide without route logic of its own. `ptsSeconds` is null in live mode.
 - Sim: a phase1 session folder (`session_manifest.json`, `route.json`, `trip_state.jsonl`; e.g. `perception_engine/nav/demo_sessions/<clip>/`) provides the timeline. The clip itself is not in the folder: the manifest names it (`videoFile`, `videoId`) and the relay never opens it. Media time t maps to `trip_state[0].timestampMs + 1000·t`, or to `videoStartTimestampMs + 1000·t` when the manifest sets that optional field (for recordings where the video and the GPS log started at different times).
 - When phase1 has no active maneuver, `routeState` defaults to `action: "GO_STRAIGHT"`, `audio: ""`, `ui: "DISTANCE_LABEL"`, `distanceMeters: null`. `requiredLane` is free text (`"right"`, `"2"`, `"2-3"`); clients also accept a JSON number.
 - `client.trip_state`: `heading` and `speedMps` are numbers (send 0 when unknown, like the android-collector; the server also reads null as 0). Only the session controller, or a client whose `client.hello` has `navigation.mode: "live"`, may feed live navigation; others get `perception.error notUplinkClient`. A sample without a numeric `timestampMs` and `location {lat, lng}` gets a rate-limited `perception.error badMessage`. A `client.trip_state` sent while live navigation is not running gets one `perception.error modeNotAvailable`. A newly connected client immediately receives the last `navigation.packet`.
@@ -153,7 +153,7 @@ The phase1 Node.js navigation engine computes `SpatialNavigationPacket`s. It is 
 ## Contract files and tests
 
 - JSON Schemas (draft 2020-12), one per message type: `perception_engine/contracts/schemas/<type>.schema.json`. Golden samples from real server / relay runs: `perception_engine/contracts/samples/v2/` (regenerate with `perception_engine/tests/make_golden_samples_v2.py` and `perception_engine/nav/make_contract_samples.js`).
-- Python: `perception_engine/tests/test_protocol_v2.py` validates every sample against its schema and runs a real server loopback. Kotlin: `perception_engine/android/perception-bridge` (built from `driving_assist/` as `:perception-bridge`) `ProtocolV2Test` decodes and round-trips every sample; `ContractFieldCoverageTest` fails when a sample field is not modelled in Kotlin (apart from a short list of server diagnostics) or a value changes on the Kotlin round trip.
+- Python: `perception_engine/tests/test_protocol_v2.py` validates every sample against its schema and runs a real server loopback. Kotlin: `perception_engine/android/perception-bridge` (built from `frontend/` as `:perception-bridge`) `ProtocolV2Test` decodes and round-trips every sample; `ContractFieldCoverageTest` fails when a sample field is not modelled in Kotlin (apart from a short list of server diagnostics) or a value changes on the Kotlin round trip.
 
 ## Client-side rules (implemented in the Kotlin `PerceptionBridge`)
 

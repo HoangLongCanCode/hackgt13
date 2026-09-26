@@ -38,7 +38,7 @@ phase1 is **required, not copied**: the relay `require()`s `spatial/phase1` (`lo
 
 An explicit folder (1 or 2) may use either layout: a `spatial/` folder (`<dir>/phase1/index.js`), a repo root that holds `spatial/`, or a legacy checkout (`<dir>/src/phase1/index.js`). An explicit value that is neither is an error, not a silent fallback; the message lists the paths tried. Navigation is optional: without Node or the engine the server still runs and just sends no `navigation.packet`.
 
-Only `phase1/` and `scripts/load-env.js` are loaded from the engine folder. The other `spatial/scripts/*.js` on `main` still `require('../src/phase1')` (a path from before the move) and fail; the relay does not use them.
+Only `phase1/` and `scripts/load-env.js` are loaded from the engine folder. The relay does not use the other `spatial/scripts/*.js` (they `require('../phase1')` and can be run on their own).
 
 Requirements: Node 18+ (tested with v24; uses global `fetch` for Google), no npm packages.
 
@@ -57,7 +57,7 @@ Source of truth: [`contracts/PROTOCOL_v2.md`](../contracts/PROTOCOL_v2.md) → *
   "packet": { "packetType": "SPATIAL_NAVIGATION_PACKET", "...": "verbatim phase1 packet" } }
 ```
 
-- `routeState` is derived 1:1 from `packet`: `action` = `activeManeuver.type` (`GO_STRAIGHT` if none), `audio` = `audioInstructions[0].content` (`""` if none), `ui` = `spatialInstructions[0].type` (`DISTANCE_LABEL` if none), `distanceMeters` = metres to the active maneuver, the same number phase1 puts in its text. The AR app's `RouteState(time, action, audio, ui)` maps directly: `action` / `audio` / `ui` as is, `time` = `ptsSeconds` in sim. The overlay's arrow logic already understands the phase1 names (`TURN_LEFT`/`TURN_RIGHT`/`KEEP_*` contain LEFT/RIGHT, `GO_STRAIGHT` contains STRAIGHT; `ui` ∈ `TURN_ARROW`, `LANE_ARROW`, `EXIT_MARKER`, `DISTANCE_LABEL`, `WARNING`).
+- `routeState` is derived 1:1 from `packet`: `action` = `activeManeuver.type` (`GO_STRAIGHT` if none), `audio` = `audioInstructions[0].content` (`""` if none), `ui` = `spatialInstructions[0].type` (`DISTANCE_LABEL` if none), `distanceMeters` = metres to the active maneuver, the same number phase1 puts in its text. The tablet app (`frontend/`) reads it through the bridge's `NavigationMapper` into its `RouteGuide` (`nav/RouteGuide.kt`: maneuver, distance, spatial instruction type, road name, ETA) with no route logic of its own; `ui` ∈ `TURN_ARROW`, `LANE_ARROW`, `EXIT_MARKER`, `DISTANCE_LABEL`, `WARNING`.
 - `packet` is phase1's `SpatialNavigationPacket`, unchanged. Fields phase1 leaves undefined are absent.
 - **sim**: media time `t` → trip time `trip_state[0].timestampMs + 1000·t`, and the packet is built from the samples up to that time. Seeking works because the timeline has no hidden state. Optional manifest extension `videoStartTimestampMs`: when present, it replaces `trip_state[0].timestampMs` (for real sessions where the video started before or after the GPS log).
 - **live**: each `client.trip_state` (the body is a phase1 `trip_state.jsonl` line plus `"type"`) is answered with one packet. `ptsSeconds` is `null`, and `tripTimestampMs` is the newest sample's timestamp. Missing `heading` / `speedMps` count as 0, as the android-collector does. A sample more than 60 s older than the newest one starts a new history (client clock reset).
@@ -141,7 +141,7 @@ How they are made:
 1. Record GPS with phase1's `android-collector` app (writes `session_manifest.json` + `trip_state.jsonl` on the phone).
 2. Pull it into a git-ignored folder (it contains your location history, so don't commit it):
    `node ../spatial/scripts/pull-android-capture.js data/nav_sessions` (from `perception_engine/`; `data/` is git-ignored).
-3. Add `route.json`. Either run phase1's `scripts/process-captured-session.js data/nav_sessions` (on `main` it still requires `../src/phase1` and fails until that path is fixed; a legacy checkout of the old `phase1` branch runs it), which uses the newest `session_*` folder, with origin and destination from `PHASE1_DEMO_ORIGIN` / `PHASE1_DEMO_DESTINATION` and Google if a key is set. Or copy a `route.json` made with the same provider.
+3. Add `route.json`. Either run phase1's `scripts/process-captured-session.js data/nav_sessions` (`node ../spatial/scripts/process-captured-session.js data/nav_sessions` from `perception_engine/`), which uses the newest `session_*` folder, with origin and destination from `PHASE1_DEMO_ORIGIN` / `PHASE1_DEMO_DESTINATION` and Google if a key is set. Or copy a `route.json` made with the same provider.
 4. For sim playback, record the drive video at the same time and put its file name in the manifest's `videoFile` (the collector leaves it empty). If the video did not start with the first GPS sample, set `videoStartTimestampMs` (epoch ms of video frame 0).
 5. Run the server with `--nav-session data/nav_sessions/phase1/session_<ts>`, or live on the road with `--nav-destination "<place>" --nav-provider google`, where the route starts at the first GPS fix.
 

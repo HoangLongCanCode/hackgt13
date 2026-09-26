@@ -49,7 +49,7 @@ PowerShell, from `perception_engine/`. The navigation engine is found in `../spa
 
 (`.venv` is the venv made by `scripts\setup_env.ps1`; use your own interpreter path if it lives elsewhere.)
 
-PowerShell, from `driving_assist/` (after `.\gradlew.bat :bridge-cli:installDist`, which installs into
+PowerShell, from `frontend/` (after `.\gradlew.bat :bridge-cli:installDist`, which installs into
 `perception_engine/android/bridge-cli/build/install/`):
 
 ```powershell

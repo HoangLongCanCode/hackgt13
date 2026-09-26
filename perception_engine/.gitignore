@@ -19,7 +19,7 @@ __pycache__/
 *.log
 .env
 
-# Gradle / Kotlin build output of the JVM modules in android/ (built through driving_assist)
+# Gradle / Kotlin build output of the JVM modules in android/ (built through ../frontend/)
 /android/**/build/
 /android/**/.gradle/
 .kotlin/

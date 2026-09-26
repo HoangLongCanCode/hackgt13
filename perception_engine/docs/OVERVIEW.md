@@ -60,8 +60,8 @@ Formats: [INTERFACES.md](INTERFACES.md).
 - **Serial mode.** `PerceptionEngine.step(frame)` runs everything on one thread with the `every` / `phase` schedule in
   `config_realtime.yaml`; the offline tools and evals use it.
 - **Server.** `perception/realtime/server.py` (FastAPI + uvicorn) handles the modes (video, sim, live, auto), sessions,
-  controller/watcher roles, credits for the live uplink, the sim look-ahead scheduler and the phase1 navigation relay.
-  The asyncio loop never touches torch.
+  controller/watcher roles, credits for the live uplink, the sim look-ahead scheduler, the phase1 navigation relay and
+  the ElevenLabs text-to-speech proxy for the tablet's voice (`POST /tts`). The asyncio loop never touches torch.
 - **Deterministic.** No LLM anywhere; outputs are reproducible for fixed weights and inputs (plan section 16).
 
 ## Blocks, chosen models and alternatives
@@ -193,8 +193,8 @@ Reproduce: the eval commands per block are in
 
 ## Safety boundary
 
-- **Display only** (plan section 38). No output steers, brakes or accelerates, and nothing claims autonomy or a safe
-  distance. The server's hello carries this statement in its `safety` field.
+- **Display only** (plan section 38). No output steers, brakes or accelerates; distances are shown as measurements
+  ("Vehicle ahead: 8.4 m"), never as advice. The server's hello carries this statement in its `safety` field.
 - **No LLM in any safety path** (plan section 16). Every rule is deterministic.
 - **Estimates, not guarantees.** Distances, TTC and light states are estimates with confidence values. `UNKNOWN` means
   unknown and is never guessed; `GREEN` is never permission to go.

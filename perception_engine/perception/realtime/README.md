@@ -34,6 +34,7 @@ Start-up takes about 30-60 s (26-54 s measured; longer while other jobs use the 
 | `--host 0.0.0.0 --port 8765` | listen address |
 | `--nav-session DIR` | sim/video navigation from a phase1 session folder (`session_manifest.json`, `route.json`, `trip_state.jsonl`) |
 | `--nav-route route.json` \| `--nav-destination "QUERY" [--nav-origin "QUERY"] [--nav-provider mock\|google]` | live navigation driven by `client.trip_state` |
+| `--no-tts`, `--tts-allow-lan` | ElevenLabs TTS proxy: never call ElevenLabs (`/tts` answers 503); accept `/tts` from Wi-Fi clients too (default loopback only). See "TTS proxy" |
 | `--phase1-dir DIR`, `--node node` | where the navigation engine lives (default: env `PHASE1_DIR`, else `../spatial` on `main`, or a legacy `src/phase1` checkout; see `nav/README.md`) and which Node to run |
 
 ## Architecture
@@ -134,6 +135,17 @@ When a `--nav-*` flag is given, the server imports `perception.realtime.nav_rela
 - **Relay health.** 3 relay calls in a row without a packet set `navigation.available: false` (reason in `error`), re-announce the hello and send one `perception.error internal`; the next packet clears it.
 - **New clients** receive the last packet on connect.
 
+## TTS proxy (ElevenLabs)
+
+The tablet app gets its ElevenLabs voice clips through this server, because ElevenLabs' terms forbid putting the API key in the APK. `tts_proxy.py` implements the proxy contract of [`docs/audio/AUDIO_CUE_RULES.md`](../../docs/audio/AUDIO_CUE_RULES.md) sections 10.4 and 10.5. Model, seed and voice profiles come from `docs/audio/audio_cues.v1.json` (`elevenlabs`, `voiceProfiles`, `speechRegex`), read once at start-up.
+
+- **Key.** Set `ELEVENLABS_API_KEY` and `ELEVENLABS_VOICE_ID` in the environment, or put them as `KEY=VALUE` lines in `perception_engine/.env`, which is gitignored. The environment wins. The server logs only `configured` / `not configured` and never logs or returns either value. Without both, `/tts` answers `503 notConfigured` and the tablet falls back to its native voice.
+- **`POST /tts`** takes `{"text": "Turn right onto Main Street.", "voice": "nav"|"alert", "cacheOnly": false}`. The text must be at most 200 characters and match `^[A-Z][A-Za-z ,'-]*\.$`. The response is `200 application/octet-stream`: the whole clip as headerless s16le mono PCM at 24 kHz, with leading silence trimmed to 20 ms or less. It comes with the headers `X-Audio-Format: pcm_s16le;rate=24000;channels=1`, `X-TTS-Cache: hit|miss` and `X-TTS-Key: <sha256>`. Errors are JSON `{"error": ...}`: `400 badText|badVoice|badRequest`, `403 notLoopback`, `404 notCached` (a `cacheOnly` miss), `429 spendGuard|upstreamBusy` with `Retry-After`, `502 upstream` (with the ElevenLabs `status`) or `invalidAudio` (MP3 or WAV came back instead of PCM), `503 notConfigured`, and `504 upstreamTimeout` (the whole call took longer than 2.5 s).
+- **`GET /tts/health`** returns `{configured, enabled, apiKeySet, voiceIdSet, modelId, format, cacheEntries, lastError, allowLan, budget: {perMinuteLeft, dayLeft, inFlight}}`. The voice id itself is never returned.
+- **Clients.** Loopback only by default: over USB, `adb reverse tcp:8765 tcp:8765` arrives as 127.0.0.1, so the app uses `http://127.0.0.1:8765/tts`. Wi-Fi and hotspot demos need `--tts-allow-lan`. uvicorn runs with `proxy_headers=False`, so an `X-Forwarded-For` header cannot fake a loopback client. `--no-tts` never calls ElevenLabs.
+- **Cache and budget.** Clips are cached on disk as `outputs/tts_cache/<sha256>.pcm` (gitignored). The key is the sha256 of `text|voice_id|model_id|settings|pcm_24000|seed|language_code|apply_text_normalization|`. Cache hits are free. Upstream calls are capped at 1,000 characters per rolling minute, 2 in flight and 30,000 characters per day; a duplicate request made while the same clip is being fetched shares that call. One keep-alive `httpx.AsyncClient` runs on the server loop, so nothing blocks the WebSocket.
+- **Not implemented yet:** `POST /tts/prefetch`, `GET /tts/pack[/{sha256}]`, the separate prefetch budget, and the 429 retry policy by `detail.code`. An upstream 429 is passed on at once as `upstreamBusy`.
+
 ## Choosing maxInFlight (live)
 
 Measured with `ws_probe live` (a 30 fps "camera", 960x540 q80, credits honoured) on the city clip. Latency is capture to wave-1 result on the client clock.
@@ -193,6 +205,7 @@ The fast lane alone takes about 32 ms (detect 20, track 3, lights 7, decode 3) w
 | `python scripts/netem_proxy.py --listen 127.0.0.1:8766 --target 127.0.0.1:8765 --profile wifi-busy` | TCP proxy that adds one-way delay, jitter, spikes and a bandwidth cap per direction (profiles `usb`, `wifi-good`, `wifi-busy`, `hotspot`; every parameter can be overridden). Point the probe at the proxy port |
 | `python -m perception.realtime.bench_lanes --seconds 30 [--variant JSON ...]` | The two-lane pipeline alone, at real-time speed, without sockets |
 | `python tests/test_protocol_v2.py [--offline]` | Plain-Python tests: schemas, samples, SDC1 header, wire builders, geometry distance, nav worker, plus a real server subprocess for live loopback and sim tests |
+| `python tests/test_tts_proxy.py` | Offline TTS proxy tests: a fake ElevenLabs (`httpx.MockTransport`), a temp cache, fake credentials; nothing touches the network |
 | `python tests/make_golden_samples_v2.py` | Regenerates `contracts/samples/v2/perception.*` and `client.*` from real server runs (about 3 min) |
 | `python -m perception.realtime.glasses_probe [--url ws://HOST:8000/ws] [--video CLIP] [--pad 640x480] [--save DIR]` | Fake glasses app: streams a clip as 640-px jpeg-base64 JSON frames at 8 fps without waiting, prints replies, errors and send-to-reply latency once a second, and with `--save` draws every reply onto the JPEG it answers (overlay check without a phone) |
 | `python tests/test_glasses_server.py [--offline] [--url ws://127.0.0.1:8000/ws]` | Glasses listener tests: bad-frame reasons, `fit_frame` inverse, the document builder, plus a real server for one frame, errors, ping, an 8 fps burst, padded frames and one-stream-at-a-time |
@@ -223,6 +236,7 @@ python -m perception.realtime.glasses_server                     # ws://0.0.0.0:
 | `subscribers.py` | `PerceptionBus`: the server publishes every wave-1 and wave-2 dict in-process before it serialises them |
 | `ws_probe.py`, `bench_lanes.py` | measurement tools (above) |
 | `nav_relay.py` | owned by the navigation side; the server only calls its interface |
+| `tts_proxy.py` | the ElevenLabs proxy (`TtsProxy`, `add_tts_routes`): `POST /tts`, `GET /tts/health`, the disk cache, the spend guard and PCM validation (above) |
 | `glasses_server.py`, `glasses_wire.py` | the glasses listener on port 8000 (above): socket, engine thread, and the frame decoder + `FrameResult` to Spatial Instruction mapper |
 | `../engine.py` | `PerceptionEngine`: `fast_step` / `slow_step` (two lanes), `step` (serial), `geometry_distance`, session camera |
 | `../config_realtime.yaml` | models, the two-lane schedule, and the serial schedule for offline tools |

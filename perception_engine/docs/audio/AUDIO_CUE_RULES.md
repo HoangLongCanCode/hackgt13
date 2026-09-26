@@ -1,6 +1,8 @@
 # Audio cue rules: deterministic driving logic to audio cues
 
-Status: specification, not implemented yet (2026-09-26). It covers production plan sections 22 (Audio Engine),
+Status: specification (2026-09-26); its core is implemented in the tablet app (`APP/voice/`, `VoiceRulesTest`) and
+the laptop proxy (`perception_engine/perception/realtime/tts_proxy.py`, `tests/test_tts_proxy.py`); what is not built
+yet is listed in `perception_engine/AGENTS.md` (known gaps). It covers production plan sections 22 (Audio Engine),
 23 (ElevenLabs / VoiceProvider) and 24 (voice priority), inside the section 38 safety boundary. The optional LLM
 layer (plan section 25) is out of scope: no model decides what is said or when.
 
@@ -14,7 +16,7 @@ Companion files:
 | Shorthand | Path |
 |---|---|
 | `BRIDGE/` | `perception_engine/android/perception-bridge/src/main/kotlin/com/drivingassist/copilot/` |
-| `APP/` | `driving_assist/app/src/main/java/com/drivingassist/glass/perception/` |
+| `APP/` | `frontend/app/src/main/java/com/drivingassist/spatialcopilot/` (this spec was written when the app was `driving_assist/`; class names in sections 12-14 are the plan, the built code is `APP/voice/`) |
 | navigation engine | `spatial/phase1/` on `main` (the same code as `src/phase1/` at commit `a3f432c`, branch `louis`) |
 | relay | `perception_engine/nav/relay_core.js` |
 | contracts | `perception_engine/contracts/` (`PROTOCOL_v2.md`, `schemas/`, `samples/v2/`) |
@@ -630,7 +632,7 @@ The proxy returns whole clips, so "ready" means generation plus transfer, which 
 ### 10.6 The voice pack
 
 1. `python scripts/make_voice_pack.py [--phrases FILE] [--max-chars N]` (from `perception_engine/`) renders `fixedPhrases` plus any phrase list, trims leading silence to ≤ 20 ms, normalizes speech to about -16 LUFS with peaks ≤ -1 dBTP, and writes `outputs/voice_pack/<packId>/manifest.json` plus `<key>.pcm` files. The manifest: `{schema: "voice_pack.v1", packId, voiceId, modelId, outputFormat: "pcm_24000", seed, settings: {nav, alert}, entries: [{text, profile, key, file, samples, leadingSilenceMs, lufs}]}`.
-2. The tablet loads `<app external files>/voice/<packId>/` (the same convention as `sim/`), filled by `adb push outputs/voice_pack/<packId> /sdcard/Android/data/com.drivingassist.glass/files/voice/` or at session start from `GET /tts/pack`.
+2. The tablet loads `<app external files>/voice/<packId>/` (the same convention as `sim/`), filled by `adb push outputs/voice_pack/<packId> /sdcard/Android/data/com.drivingassist.spatialcopilot/files/voice/` or at session start from `GET /tts/pack`.
 3. The tablet keys its caches by (voiceId, profile, text) and rejects a pack whose `voiceId`, `modelId` or `outputFormat` differs from `/tts/health`: it then uses native clips and the chip shows `VOICE LOCAL (pack mismatch)`.
 4. `outputs/` is gitignored: generated audio is never committed and never goes into `app/src/main/assets/` (that path is not ignored).
 
@@ -897,6 +899,9 @@ File each row as a GitHub issue against `spatial/phase1/` on `main`. None blocks
 3. `BridgeConfig.drivingContext` to IMPERIAL units.
 
 ### 14.4 AR app (`driving_assist/`, Tom, branch `tom`)
+
+Written for the former `driving_assist/` app. In `frontend/`, item 1 is done (manifest `<queries>`) and so are the
+stale and off-route banners and the alert emphasis of item 3; items 2 and 4 name classes that no longer exist.
 
 One additive PR, every touched file listed (AGENTS rule 6):
 1. `AndroidManifest.xml`: `<queries><intent><action android:name="android.intent.action.TTS_SERVICE"/></intent></queries>` (needed for the native fallback voice under package visibility, target SDK 35).
