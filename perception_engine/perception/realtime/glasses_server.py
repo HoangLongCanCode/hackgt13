@@ -10,19 +10,23 @@ document it gets back; perception/realtime/glasses_wire.py has both formats. Run
 
 Phone URL: emulator ws://10.0.2.2:8000/ws; same Wi-Fi ws://<laptop LAN IP>:8000/ws (printed at start-up; allow
 inbound TCP 8000 in Windows Firewall); USB `adb reverse tcp:8000 tcp:8000`, then ws://127.0.0.1:8000/ws.
-GET /health -> {"status": "ok", "engine": "perception"} once the engine is ready ("loading" before, "error" if it failed);
-GET /stats -> counters and step times.
+GET /health -> {"status": "ok", "engine": "perception"} once the engine is ready ("loading" before, "error" if
+it failed); GET /stats -> counters and step times.
 
 Transport (what the phone implements): text frames only, no handshake (the first message is a camera frame), about
 8 frames/s without waiting for replies, a websocket ping every 15 s, cleartext ws://. A frame gets one reply: the
-document, or {"error": reason} (bad frame, engine not ready) after which the socket keeps reading. A frame that a
-newer one supersedes before the engine gets to it is dropped with no reply (latest wins per connection), so the
-overlay never lags behind the camera. Nothing of protocol v2 (hello, skip, credits, waves) is sent here.
+document, or {"error": reason} (bad frame, engine not ready, engine busy) after which the socket keeps reading. A
+frame that a newer one supersedes before the engine gets to it is dropped with no reply (latest wins per
+connection), so the overlay never lags behind the camera. Nothing of protocol v2 (hello, skip, credits, waves) is
+sent here.
 
 Threads: the asyncio loop (sockets, JSON, base64 + JPEG decode in the default thread pool) and ONE engine thread
 that loads the Perception Engine with the v2 server's config, warms it up and then runs every serial engine.step()
-under a lock (never fast_step / slow_step). A new connection, or a gap in timestampMs, starts a new stream
-(engine.reset()). Running this and the v2 server at the same time loads the engine twice (two processes).
+under a lock (never fast_step / slow_step). The engine's temporal state (tracks, lane smoothing, depth Kalman)
+belongs to one connection at a time: while it streams, other connections get {"error": "engine busy with another
+client"}; it hands over when that connection closes or sends nothing for STREAM_GAP_S. A new owner, a jump in
+timestampMs or a change of JPEG size starts a new stream (engine.reset()). Running this and the v2 server at the
+same time loads the engine twice (two processes; about 1.7 GB of GPU memory together, measured).
 """
 from __future__ import annotations
 
@@ -55,6 +59,11 @@ SEND_TIMEOUT_S = 10.0             # a reply that cannot be sent this long (peer 
 STREAM_GAP_S = 2.0                # timestampMs jump (forward) that starts a new stream (engine.reset())
 STREAM_BACKSTEP_S = 0.5           # timestampMs going back more than this starts a new stream too
 LOG_EVERY_S = 10.0                # console stats line while frames arrive
+BUSY_REASON = "engine busy with another client"
+
+
+class EngineBusy(RuntimeError):
+    """Another connection owns the engine stream."""
 
 
 def primary_ip() -> Optional[str]:
@@ -75,7 +84,7 @@ def _pct(v, q: float) -> Optional[float]:
 # ----------------------------------------------------------------------------- engine thread
 class EngineThread(threading.Thread):
     """Owns the PerceptionEngine: loads and warms it up in this thread (cuDNN / onnxruntime caches are per thread),
-    then runs submitted calls one at a time. Daemon, so Ctrl+C during the 30-60 s load does not hang."""
+    then runs submitted calls one at a time. Daemon, so Ctrl+C during the 20-60 s load does not wait for it."""
 
     def __init__(self, cfg: dict[str, Any], warmup: bool):
         super().__init__(name="glasses-engine", daemon=True)
@@ -87,8 +96,11 @@ class EngineThread(threading.Thread):
         self.ready_evt = threading.Event()
         self.load_s: Optional[float] = None
         self.lock = threading.Lock()           # held around engine.step() (and the stream bookkeeping)
+        self.own_lock = threading.Lock()       # owner / owner_seen (short; the loop thread releases ownership)
         self.owner: Optional[int] = None       # connection whose stream the engine's temporal state belongs to
+        self.owner_seen = 0.0                  # time.monotonic() of the owner's last analysed frame
         self.last_pts: Optional[float] = None
+        self.last_wh: Optional[tuple[int, int]] = None
         self.streams = 0
         self.step_ms: deque[float] = deque(maxlen=400)
 
@@ -119,23 +131,37 @@ class EngineThread(threading.Thread):
             except BaseException as e:
                 fut.set_exception(e)
 
+    def release(self, conn_key: int) -> None:
+        """LOOP THREAD: the connection closed; the next frame from anyone starts a new stream."""
+        with self.own_lock:
+            if self.owner == conn_key:
+                self.owner = None
+
     def analyse(self, conn_key: int, frame_id: int, timestamp_ms: int, image: np.ndarray) -> dict[str, Any]:
-        """ENGINE THREAD: one serial engine.step() on the decoded JPEG -> Spatial Instruction document."""
+        """ENGINE THREAD: one serial engine.step() on the decoded JPEG -> Spatial Instruction document.
+        Raises EngineBusy while another connection streams (interleaving two streams would reset the engine on every
+        step, and lanes and signs never run on the first step of a stream)."""
         from perception.common.video import Frame
         pts = timestamp_ms / 1000.0
+        wh = (int(image.shape[1]), int(image.shape[0]))
+        now = time.monotonic()
+        with self.own_lock:
+            if self.owner is not None and conn_key != self.owner and now - self.owner_seen <= STREAM_GAP_S:
+                raise EngineBusy(BUSY_REASON)
+            new_owner = conn_key != self.owner
+            self.owner, self.owner_seen = conn_key, now
         with self.lock:
             eng = self.engine
-            if (conn_key != self.owner or self.last_pts is None
+            if (new_owner or self.last_pts is None or wh != self.last_wh
                     or not -STREAM_BACKSTEP_S <= pts - self.last_pts <= STREAM_GAP_S):
                 eng.reset()                    # new stream: forget tracks, lane smoothing, depth Kalman
-                self.owner = conn_key
                 self.streams += 1
-            self.last_pts = pts
+            self.last_pts, self.last_wh = pts, wh
             t0 = time.perf_counter()
             try:
                 result = eng.step(Frame(index=frame_id, pts_s=pts, image=image))
             except BaseException:
-                self.owner = None              # state may be half-updated: reset before the next frame
+                self.last_pts = None           # state may be half-updated: reset before the next frame
                 raise
             self.step_ms.append((time.perf_counter() - t0) * 1000.0)
             fitted = dict(eng.last_meta["image"])
@@ -163,7 +189,7 @@ class GlassesServer:
     def __init__(self, cfg: dict[str, Any], warmup: bool):
         self.worker = EngineThread(cfg, warmup)
         self.conns: dict[int, Conn] = {}
-        self.totals = {"framesIn": 0, "analysed": 0, "dropped": 0, "errors": 0, "connections": 0}
+        self.totals = {"framesIn": 0, "analysed": 0, "dropped": 0, "errors": 0, "busy": 0, "connections": 0}
         self.started = time.time()
 
     def health(self) -> dict[str, Any]:
@@ -205,6 +231,10 @@ class GlassesServer:
             except FrameError as e:
                 await self.reply_error(c, e.reason)
                 continue
+            except Exception:                              # a decoder bug must not cost the phone its socket
+                traceback.print_exc()
+                await self.reply_error(c, "data is not a jpeg image")
+                continue
             if self.worker.state != "ok":
                 await self.reply_error(c, "engine is loading" if self.worker.state == "loading"
                                        else "engine failed to load")
@@ -231,6 +261,10 @@ class GlassesServer:
                     self.worker.analyse, c.key, frame.frame_id, frame.timestamp_ms, frame.image))
                 c.analysed += 1
                 self.totals["analysed"] += 1
+            except EngineBusy:
+                c.errors += 1
+                self.totals["busy"] += 1
+                doc = error_doc(BUSY_REASON)
             except Exception as e:
                 traceback.print_exc()
                 c.errors += 1
@@ -270,7 +304,8 @@ def create_app(srv: GlassesServer, banner: Callable[[], None]):
             ready_task.cancel()
 
     async def announce_ready():
-        await asyncio.to_thread(srv.worker.ready_evt.wait)
+        while not srv.worker.ready_evt.is_set():          # polled: a thread parked on the Event would block Ctrl+C
+            await asyncio.sleep(0.25)
         if srv.worker.state == "ok":
             print(f"\n[glasses] engine ready in {srv.worker.load_s:.1f} s", flush=True)
             banner()
@@ -310,6 +345,7 @@ def create_app(srv: GlassesServer, banner: Callable[[], None]):
             worker.cancel()
             receiver.cancel()
             srv.conns.pop(c.key, None)
+            srv.worker.release(c.key)
             print(f"[glasses] client {c.key} disconnected (in {c.frames_in}, analysed {c.analysed}, dropped "
                   f"{c.dropped}, errors {c.errors})", flush=True)
 
@@ -361,8 +397,22 @@ def main(argv: Optional[list[str]] = None) -> None:
         if sys.platform == "win32":
             print(f"  firewall    : allow inbound TCP {a.port} (admin PowerShell, once): New-NetFirewallRule "
                   f"-DisplayName \"Glasses socket {a.port}\" -Direction Inbound -Protocol TCP -LocalPort {a.port} "
-                  f"-Action Allow -Profile Private")
+                  f"-Action Allow -Profile Private,Public")
+            print("                (campus Wi-Fi such as eduroam is a Public network and may block phone-to-laptop "
+                  "traffic: use USB then)")
         print(flush=True)
+
+    # bind before loading anything: a busy port fails now, not after a 20-60 s engine load. No SO_REUSEADDR, and
+    # SO_EXCLUSIVEADDRUSE on Windows, so a second server cannot share (or take over) the port.
+    sock = socket.socket(socket.AF_INET6 if ":" in a.host else socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        sock.bind((a.host, a.port))
+        sock.listen(128)
+    except OSError as e:
+        sock.close()
+        sys.exit(f"[glasses] cannot listen on {a.host}:{a.port}: {e} (is another glasses server running?)")
 
     print("[glasses] loading the perception engine in the background (frames get {\"error\": \"engine is loading\"} "
           "until it is ready) ..." + (f" (overrides {a.set})" if a.set else ""), flush=True)
@@ -371,9 +421,9 @@ def main(argv: Optional[list[str]] = None) -> None:
 
     import uvicorn
     # per-message deflate off (base64 JPEGs barely compress); uvicorn answers websocket pings itself
-    uvicorn.run(app, host=a.host, port=a.port, log_level="warning", ws="websockets-sansio",
-                ws_per_message_deflate=False, ws_max_size=32 * 1024 * 1024)
-    if srv.worker.engine is not None:                  # close in the thread that owns the models
+    uvicorn.Server(uvicorn.Config(app, host=a.host, port=a.port, log_level="warning", ws="websockets-sansio",
+                                  ws_per_message_deflate=False, ws_max_size=32 * 1024 * 1024)).run(sockets=[sock])
+    if srv.worker.state == "ok":                       # close in the thread that owns the models
         with contextlib.suppress(Exception):
             srv.worker.submit(srv.worker.engine.close).result(timeout=10)
 

@@ -107,6 +107,7 @@ python -m perception.realtime.server --help
 python -m perception.realtime.server --mode auto                          # tablet chooses live or sim
 python -m perception.realtime.server --mode video --video data/bdd100k/videos/val/b1ff4656-0435391e.mov --loop
 python -m perception.realtime.glasses_server                              # glasses app: ws://0.0.0.0:8000/ws (JSON frames, not v2)
+python -m perception.realtime.glasses_probe --save outputs/glasses_probe  # fake glasses app, overlays drawn on the sent JPEGs
 python -m perception.realtime.ws_probe watch --seconds 30                 # fake tablet: watcher
 python -m perception.realtime.ws_probe sim --video-id b1ff4656-0435391e --seconds 30
 python -m perception.realtime.ws_probe live --seconds 30 --focal-px 525 --mount-height 1.3
@@ -170,7 +171,7 @@ adb shell am start -S -n com.drivingassist.glass/.MainActivity --es perception.s
 |---|---|---|---|
 | Protocol, offline | `python tests/test_protocol_v2.py --offline` (`perception_engine/`) | venv | 7/7 pass, about 8 s |
 | Protocol, full | `python tests/test_protocol_v2.py` | venv, GPU, weights, `data/` clip | 11/11 pass; starts its own `--mode auto` server on a free port with a fake nav relay |
-| Glasses listener | `python tests/test_glasses_server.py [--offline]` | venv; full run: GPU, weights, `data/` clip | offline 4/4, full 8/8; starts its own glasses server on a free port |
+| Glasses listener | `python tests/test_glasses_server.py [--offline]` | venv; full run: GPU, weights, `data/` clip | offline 5/5, full 10/10; starts its own glasses server on a free port |
 | Ego path | `python tests/test_ego_path.py` | venv | 3/3 pass, CPU |
 | Nav relay | `python tests/test_nav_relay.py` (optional `--phase1-dir DIR`) | venv, Node, `../spatial/` or `PHASE1_DIR` | 21/21 pass, about 10 s |
 | Kotlin bridge | `gradlew.bat :perception-bridge:test` (`../driving_assist/`) | JDK | 116 pass, 0 skipped (fails fast if `contracts/samples/v2` is missing) |

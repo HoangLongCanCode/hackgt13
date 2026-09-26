@@ -164,6 +164,12 @@ def exif_orientation_6(jpeg: bytes) -> bytes:
     return jpeg[:2] + b"\xff\xe1" + struct.pack(">H", len(exif) + 2) + exif + jpeg[2:]
 
 
+def patch_sof(jpeg: bytes, w: int, h: int) -> bytes:
+    """The same JPEG with its SOF0 header claiming w x h (what a decompression bomb looks like)."""
+    i = jpeg.index(b"\xff\xc0")
+    return jpeg[:i + 5] + h.to_bytes(2, "big") + w.to_bytes(2, "big") + jpeg[i + 9:]
+
+
 def t_decode() -> str:
     import cv2
     img = np.zeros((360, 640, 3), np.uint8)
@@ -191,8 +197,15 @@ def t_decode() -> str:
     f = gw.decode_frame(json.dumps({"encoding": "jpeg-base64", "data": b64}))
     check(f.frame_id is None and f.timestamp_ms is None, "missing ids")
 
+    check(gw._jpeg_dims(jpeg) == (640, 360) and gw._jpeg_dims(rot) == (640, 360), "SOF dimensions")
+
+    def b64s(raw: bytes) -> str:
+        return json.dumps({"encoding": "jpeg-base64", "data": base64.b64encode(raw).decode()})
     ok, png = cv2.imencode(".png", img)
     bad = [
+        (b64s(patch_sof(jpeg, 40000, 40000)), "jpeg larger than 4096 px"),     # cv2.imdecode would raise
+        (b64s(patch_sof(jpeg, 12000, 360)), "jpeg larger than 4096 px"),       # would decode to 13 MB+
+        (b64s(jpeg[:len(jpeg) // 3]), None),                                     # truncated: decoded or refused
         ("not json {", "frame is not valid JSON"),
         ("[1, 2]", "frame must be a JSON object"),
         ("12", "frame must be a JSON object"),
@@ -216,9 +229,9 @@ def t_decode() -> str:
         try:
             gw.decode_frame(text)
         except gw.FrameError as e:
-            check(e.reason == reason, f"{text[:40]!r}: got {e.reason!r}, want {reason!r}")
+            check(reason is None or e.reason == reason, f"{text[:40]!r}: got {e.reason!r}, want {reason!r}")
         else:
-            raise AssertionError(f"{text[:40]!r} accepted, want {reason!r}")
+            check(reason is None, f"{text[:40]!r} accepted, want {reason!r}")
     return f"{len(bad)} bad-frame reasons, data: prefix, wrapped base64, EXIF ignored"
 
 
@@ -367,6 +380,47 @@ def t_document_full() -> str:
     return "ego pair by index + straddle, 3 in-front nearest first, nearest fallback, 4 signs, crop undone"
 
 
+def t_document_edges() -> str:
+    """Review findings: lane pair only by index when LaneState has the shape the rule assumes; lines clipped at the
+    image border as shapes; rounding edges."""
+    lines = _lane_polylines_fitted()                           # mean x (1280 px): 0.14, 0.37, 0.63, 0.86
+    fit, src = {"width": 1280, "height": 720}, (640, 360)
+
+    def pair(ls):
+        d = gw.build_document(FrameResult(0, 0.0, lanes=ls), fit, src, 0, 0)
+        check_document(d)
+        return {b["id"]: b["points"][0] for b in d["perception"]["lanes"]["boundaries"]}
+
+    def first(i):
+        x, y = lines[i][0]
+        return [round(min(max(x / 1280, 0.0), 1.0), 4), round(y / 720, 4)]
+    want = {"left": first(1), "right": first(2)}
+    check(pair(LaneState(2, 3, lines)) == want, "index pair with laneCount + 1 lines")
+    # laneCount + 1 lines but currentLane 1: the index pair (lines 0, 1) does not bracket the centre -> straddle
+    check(pair(LaneState(1, 3, lines)) == want, f"index pair left of centre: {pair(LaneState(1, 3, lines))}")
+    # an extra uncounted chain on the left (5 lines, laneCount 3): index 1, 2 would be one lane left -> straddle
+    extra = [[[p[0] - 400.0, p[1]] for p in lines[0]]] + lines
+    check(pair(LaneState(2, 3, extra)) == want, f"uncounted chain: {pair(LaneState(2, 3, extra))}")
+    # counts missing at stream start (the 2 / 3 default must not select by index)
+    check(pair(LaneState(None, None, extra)) == want, "defaulted counts")
+    # a line leaving through the left edge is cut at x = 0, not dragged down the edge
+    edge = [[[-0.2 * 1280, 0.9 * 720], [0.1 * 1280, 0.6 * 720], [0.3 * 1280, 0.5 * 720]],
+            [[0.9 * 1280, 0.9 * 720], [0.6 * 1280, 0.6 * 720]]]
+    d = gw.build_document(FrameResult(0, 0.0, lanes=LaneState(1, 1, edge)), fit, src, 0, 0)
+    check_document(d)
+    left = next(b for b in d["perception"]["lanes"]["boundaries"] if b["id"] == "left")["points"]
+    check(left == [[0.0, 0.7], [0.1, 0.6], [0.3, 0.5]], f"clipped line {left}")
+    check(gw._clip_line([(-0.5, 0.5), (-0.1, 0.4)]) == [], "line fully outside")
+    # a box exactly 0.005 wide is kept wherever it sits; a distance that rounds to 0.0 m is dropped
+    fm = gw.FitMap.of(640, 360, 1280, 720)
+    check(gw._norm_box(fm, [0.1 * 1280, 100, 0.105 * 1280, 200]) is not None, "0.005-wide box dropped")
+    tr, de = _track(1, "car", (560, 430, 720, 560))
+    near = gw.build_document(FrameResult(0, 0.0, detections=[de], tracks=[tr], distances=[DistanceEstimate(1, 0.04)]),
+                             fit, src, 0, 0)
+    check(near["perception"]["vehicles"] == [], f"0.04 m vehicle {near['perception']['vehicles']}")
+    return "index pair only when valid, straddle otherwise, border-cut lines, 0.005 box, 0.0 m dropped"
+
+
 # ============================================================================= server
 def free_port() -> int:
     with socket.socket() as s:
@@ -488,6 +542,13 @@ async def basic_tests(url: str) -> str:
         await ph.wait(6, 30, "document without ids")
         check("instructions" in ph.replies[5], f"no-id reply {str(ph.replies[5])[:200]}")
         check_document(ph.replies[5])
+        # a crafted header (cv2.imdecode raises on it) -> error reply, socket still usable
+        await ph.ws.send(frame_text(patch_sof(enc(frames[3]), 40000, 40000), 4, ts + 250))
+        await ph.wait(7, 10, "error for a decompression bomb")
+        check(ph.replies[6] == {"error": "jpeg larger than 4096 px"}, f"bomb reply {ph.replies[6]}")
+        await ph.ws.send(frame_text(enc(frames[4]), 5, ts + 375))
+        await ph.wait(8, 30, "document after the bomb")
+        check("instructions" in ph.replies[7], f"after bomb {str(ph.replies[7])[:200]}")
         check(ph.raw_binary == 0, "binary replies")
     n_veh = len(doc["perception"]["vehicles"])
     return f"document ok ({n_veh} vehicles), errors keep the socket, ping {ping_ms:.0f} ms"
@@ -523,6 +584,36 @@ async def burst_tests(url: str) -> str:
             f"{veh} vehicle and {bnd} boundary entries")
 
 
+async def ownership_tests(url: str, port: int) -> str:
+    """One stream at a time: a second phone gets 'busy' while the first streams, and the engine once the first has
+    left. A JPEG size change inside a connection (phone rotated) starts a new stream."""
+    import cv2
+    frames = clip_frames(8, start_s=15.0)
+    ts = int(time.time() * 1000)
+    async with Phone(url) as b:
+        async with Phone(url) as a:
+            await a.ws.send(frame_text(enc(frames[0]), 1, ts))
+            await a.wait(1, 30, "owner's first document")
+            await b.ws.send(frame_text(enc(frames[1]), 1, ts))
+            await b.wait(1, 30, "second phone's reply")
+            check(b.replies[0] == {"error": "engine busy with another client"},
+                  f"second phone got {str(b.replies[0])[:120]}")
+            s0 = get_json(f"http://127.0.0.1:{port}/stats")["streams"]
+            await a.ws.send(frame_text(enc(frames[2]), 2, ts + 125))
+            await a.wait(2, 30, "owner's second document")
+            portrait = cv2.resize(frames[3][:, 140:500], (360, 640))
+            await a.ws.send(frame_text(enc(portrait), 3, ts + 250, 360, 640))
+            await a.wait(3, 30, "portrait document")
+            check(all("instructions" in r for r in a.replies), f"owner errors {a.replies}")
+            s1 = get_json(f"http://127.0.0.1:{port}/stats")["streams"]
+            check(s1 == s0 + 1, f"streams {s0} -> {s1}: same size must continue, a size change must reset")
+        await asyncio.sleep(0.3)                                   # the owner closed: ownership is released
+        await b.ws.send(frame_text(enc(frames[4]), 2, ts + 375))
+        await b.wait(2, 30, "second phone after the owner left")
+        check("instructions" in b.replies[1], f"after handover {str(b.replies[1])[:120]}")
+    return "second client busy, handover on close, rotation starts a new stream"
+
+
 def _pad(img: np.ndarray, top: int, bottom: int, left: int, right: int) -> np.ndarray:
     import cv2
     return cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=(0, 0, 0))
@@ -540,6 +631,15 @@ async def _two_frames(url: str, img: np.ndarray) -> dict:
         await ph.wait(2, 60, "frame 2")
         check(all("instructions" in r for r in ph.replies), f"errors {ph.replies}")
         return ph.replies[1]
+
+
+def _dist_to_polyline(p: tuple[float, float], line: list[list[float]]) -> float:
+    best = math.inf
+    for (xa, ya), (xb, yb) in zip(line, line[1:]):
+        dx, dy = xb - xa, yb - ya
+        t = 0.0 if dx == dy == 0 else max(0.0, min(1.0, ((p[0] - xa) * dx + (p[1] - ya) * dy) / (dx * dx + dy * dy)))
+        best = min(best, math.hypot(p[0] - (xa + t * dx), p[1] - (ya + t * dy)))
+    return best
 
 
 async def mapping_tests(url: str) -> str:
@@ -570,18 +670,20 @@ async def mapping_tests(url: str) -> str:
             nerr = max(abs(p - q) for p, q in zip(v["bbox"], r["bbox"]))
             worst_ok, worst_naive, n_cmp = max(worst_ok, err), max(worst_naive, nerr), n_cmp + 1
             check(err < 0.02, f"{name}: vehicle {v['id']} box {v['bbox']} -> {a} vs {r['bbox']} ({err:.3f})")
+        # lane lines: the padded JPEG shows more of each (extrapolated) line, and both are cut at their own image
+        # border, so compare shapes: every mapped point inside the reference image lies on the reference polyline
         rb = {b["id"]: b["points"] for b in ref["perception"]["lanes"]["boundaries"]}
         for b in got["perception"]["lanes"]["boundaries"]:
             r = rb.get(b["id"])
-            if r is None or len(r) != len(b["points"]):
+            if r is None or len(r) < 2:
                 continue
-            for p, q in zip(b["points"], r):
-                if not (0.0 < q[0] < 1.0 and 0.0 < q[1] < 1.0):
-                    continue                                       # clipped in the reference: not comparable
+            for p in b["points"]:
                 a = to_ref(*p)
-                err = max(abs(a[0] - q[0]), abs(a[1] - q[1]))
+                if not (0.0 <= a[0] <= 1.0 and 0.0 <= a[1] <= 1.0):
+                    continue                                       # in the padding: outside the reference image
+                err = _dist_to_polyline(a, r)
                 worst_ok, n_cmp = max(worst_ok, err), n_cmp + 1
-                check(err < 0.03, f"{name}: {b['id']} lane point {p} -> {a} vs {q} ({err:.3f})")
+                check(err < 0.03, f"{name}: {b['id']} lane point {p} -> {a} is {err:.3f} off the reference {r}")
     check(n_cmp >= 2, f"only {n_cmp} comparable boxes / points")
     if worst_naive:
         check(worst_naive > 3 * max(worst_ok, 0.005), f"padding had no visible effect ({worst_naive:.3f})")
@@ -596,7 +698,8 @@ def main() -> int:
     a = ap.parse_args()
     ok = True
     for name, fn in [("decode + bad-frame reasons", t_decode), ("FitMap inverts fit_frame", t_fitmap_inverts_fit_frame),
-                     ("document, empty result", t_document_empty), ("document, full result", t_document_full)]:
+                     ("document, empty result", t_document_empty), ("document, full result", t_document_full),
+                     ("document, review edge cases", t_document_edges)]:
         ok &= run_test(name, fn)
     if not a.offline:
         proc = None
@@ -611,10 +714,12 @@ def main() -> int:
             else:
                 port = int(url.rsplit(":", 1)[1].split("/")[0])
                 h = wait_ready(port, None)
-            ok &= run_test("health", lambda: (check(h == {"status": "ok", "engine": "perception"}, f"health {h}"), str(h))[1])
+            ok &= run_test("health", lambda: (check(h == {"status": "ok", "engine": "perception"}, f"health {h}"),
+                                              str(h))[1])
             ok &= run_test("one frame, errors, ping", lambda: asyncio.run(basic_tests(url)))
             ok &= run_test("8 fps burst, latest wins", lambda: asyncio.run(burst_tests(url)))
             ok &= run_test("fit_frame undone on padded frames", lambda: asyncio.run(mapping_tests(url)))
+            ok &= run_test("one stream at a time", lambda: asyncio.run(ownership_tests(url, port)))
             st = get_json(f"http://127.0.0.1:{port}/stats")
             print(f"[test] server stats: step {st['stepMs']} in {st['framesIn']} analysed {st['analysed']} "
                   f"dropped {st['dropped']} errors {st['errors']}", flush=True)
