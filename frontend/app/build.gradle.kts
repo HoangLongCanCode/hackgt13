@@ -5,11 +5,11 @@ plugins {
 }
 
 android {
-    namespace = "com.ksr.spatialcopilot"
+    namespace = "com.drivingassist.spatialcopilot"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.ksr.spatialcopilot"
+        applicationId = "com.drivingassist.spatialcopilot"
         minSdk = 26
         targetSdk = 35
         versionCode = 1

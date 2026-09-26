@@ -1,4 +1,4 @@
-package com.ksr.spatialcopilot.ui
+package com.drivingassist.spatialcopilot.ui
 
 import android.Manifest
 import android.content.pm.PackageManager
@@ -37,11 +37,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.ksr.spatialcopilot.CopilotUi
-import com.ksr.spatialcopilot.CopilotViewModel
-import com.ksr.spatialcopilot.camera.DrivingCamera
-import com.ksr.spatialcopilot.model.ArrowHeading
-import com.ksr.spatialcopilot.perception.LinkState
+import com.drivingassist.spatialcopilot.CopilotUi
+import com.drivingassist.spatialcopilot.CopilotViewModel
+import com.drivingassist.spatialcopilot.camera.DrivingCamera
+import com.drivingassist.spatialcopilot.model.ArrowHeading
+import com.drivingassist.spatialcopilot.perception.LinkState
 
 private val Mint = Color(0xFF7DFFC3)
 private val Ink = Color(0xCC101614)

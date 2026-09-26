@@ -35,10 +35,10 @@ While the socket is down, the overlay stays on a built-in highway sketch so the 
 
 | Path | Role |
 |---|---|
-| `app/src/main/java/com/ksr/spatialcopilot/ui/SpatialArEngine.kt` | Spatial AR Engine. Lane arrows, edges, distances, signs. |
-| `app/src/main/java/com/ksr/spatialcopilot/nav/NavigationLogic.kt` | Lane choice and the Exit 56 placeholder. |
-| `app/src/main/java/com/ksr/spatialcopilot/perception/PerceptionClient.kt` | WebSocket, `client.hello`, JPEG uplink. |
-| `app/src/main/java/com/ksr/spatialcopilot/perception/Protocol.kt` | Maps server JSON into a `SpatialInstruction`. |
+| `app/src/main/java/com/drivingassist/spatialcopilot/ui/SpatialArEngine.kt` | Spatial AR Engine. Lane arrows, edges, distances, signs. |
+| `app/src/main/java/com/drivingassist/spatialcopilot/nav/NavigationLogic.kt` | Lane choice and the Exit 56 placeholder. |
+| `app/src/main/java/com/drivingassist/spatialcopilot/perception/PerceptionClient.kt` | WebSocket, `client.hello`, JPEG uplink. |
+| `app/src/main/java/com/drivingassist/spatialcopilot/perception/Protocol.kt` | Maps server JSON into a `SpatialInstruction`. |
 | `perception_api.md` | Wire format for the other developer. |
 
 JVM checks for the header, the exit HUD, and the JSON mapping:
@@ -49,4 +49,4 @@ gradlew.bat :app:testDebugUnitTest
 
 ## Contract
 
-Camera uplink is a 24-byte `KSR1` header plus a baseline JPEG (about 960×540, quality 80). The server may answer with perception protocol v2 (`perception.frame`, `perception.update`, `navigation.packet`) or with one `spatial.instruction` JSON object. Both become the same drawing input. Field-level detail is in `perception_api.md`.
+Camera uplink is a 24-byte `SDC1` header plus a baseline JPEG (about 960×540, quality 80). The server may answer with perception protocol v2 (`perception.frame`, `perception.update`, `navigation.packet`) or with one `spatial.instruction` JSON object. Both become the same drawing input. Field-level detail is in `perception_api.md`.

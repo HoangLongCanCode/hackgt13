@@ -1,8 +1,8 @@
-package com.ksr.spatialcopilot.perception
+package com.drivingassist.spatialcopilot.perception
 
 import android.os.Build
 import android.os.SystemClock
-import com.ksr.spatialcopilot.model.UplinkHeader
+import com.drivingassist.spatialcopilot.model.UplinkHeader
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -32,7 +32,7 @@ enum class LinkState {
  * One WebSocket to the perception laptop.
  *
  * Text frames are JSON (`client.hello` up, perception and navigation messages down,
- * or a ready-made `spatial.instruction`). Binary frames are `KSR1` + JPEG.
+ * or a ready-made `spatial.instruction`). Binary frames are `SDC1` + JPEG.
  * At most [maxInFlight] camera frames are outstanding; extras are dropped.
  */
 class PerceptionClient(

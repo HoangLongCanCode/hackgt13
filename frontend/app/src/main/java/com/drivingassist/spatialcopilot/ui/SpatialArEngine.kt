@@ -1,4 +1,4 @@
-package com.ksr.spatialcopilot.ui
+package com.drivingassist.spatialcopilot.ui
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.fillMaxSize
@@ -25,11 +25,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.ksr.spatialcopilot.model.ArrowHeading
-import com.ksr.spatialcopilot.model.ImageBox
-import com.ksr.spatialcopilot.model.LaneSlot
-import com.ksr.spatialcopilot.model.Px
-import com.ksr.spatialcopilot.model.SpatialInstruction
+import com.drivingassist.spatialcopilot.model.ArrowHeading
+import com.drivingassist.spatialcopilot.model.ImageBox
+import com.drivingassist.spatialcopilot.model.LaneSlot
+import com.drivingassist.spatialcopilot.model.Px
+import com.drivingassist.spatialcopilot.model.SpatialInstruction
 import kotlinx.coroutines.delay
 import kotlin.math.abs
 import kotlin.math.hypot

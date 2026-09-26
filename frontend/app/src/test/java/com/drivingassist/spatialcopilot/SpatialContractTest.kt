@@ -1,13 +1,13 @@
-package com.ksr.spatialcopilot
+package com.drivingassist.spatialcopilot
 
-import com.ksr.spatialcopilot.model.ArrowHeading
-import com.ksr.spatialcopilot.model.SpatialInstruction
-import com.ksr.spatialcopilot.model.SpatialJson
-import com.ksr.spatialcopilot.model.UplinkHeader
-import com.ksr.spatialcopilot.nav.NavigationLogic
-import com.ksr.spatialcopilot.perception.ProtocolDecoder
-import com.ksr.spatialcopilot.perception.ServerEvent
-import com.ksr.spatialcopilot.perception.World
+import com.drivingassist.spatialcopilot.model.ArrowHeading
+import com.drivingassist.spatialcopilot.model.SpatialInstruction
+import com.drivingassist.spatialcopilot.model.SpatialJson
+import com.drivingassist.spatialcopilot.model.UplinkHeader
+import com.drivingassist.spatialcopilot.nav.NavigationLogic
+import com.drivingassist.spatialcopilot.perception.ProtocolDecoder
+import com.drivingassist.spatialcopilot.perception.ServerEvent
+import com.drivingassist.spatialcopilot.perception.World
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -22,7 +22,7 @@ class SpatialContractTest {
         )
         val hex = header.joinToString("") { "%02x".format(it) }
         assertEquals(24, header.size)
-        assertEquals("4b535231010000000100000014d8ead06537010000000000", hex)
+        assertEquals("53444331010000000100000014d8ead06537010000000000", hex)
         val wrapped = UplinkHeader.wrap(1, 342385412986900L, 0, byteArrayOf(1, 2, 3))
         assertEquals(27, wrapped.size)
     }

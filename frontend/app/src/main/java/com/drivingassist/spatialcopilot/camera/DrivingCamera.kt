@@ -1,4 +1,4 @@
-package com.ksr.spatialcopilot.camera
+package com.drivingassist.spatialcopilot.camera
 
 import android.util.Size
 import android.view.ViewGroup

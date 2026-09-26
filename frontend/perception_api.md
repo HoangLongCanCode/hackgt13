@@ -61,7 +61,7 @@ Python layout: `struct.Struct("<4sHHIqHH")`.
 
 | Offset | Type | Field | Value |
 |---|---|---|---|
-| 0 | 4 bytes ASCII | magic | `KSR1` |
+| 0 | 4 bytes ASCII | magic | `SDC1` |
 | 4 | uint16 | headerVersion | `1` |
 | 6 | uint16 | flags | `0` |
 | 8 | uint32 | frameId | client counter, wraps |
@@ -79,10 +79,10 @@ JPEG:
 Reference header for `frameId = 1`, `captureTimeNs = 342385412986900`, `rotationDegrees = 0`:
 
 ```
-4b 53 52 31 01 00 00 00 01 00 00 00 14 d8 ea d0 65 37 01 00 00 00 00 00
+53 44 43 31 01 00 00 00 01 00 00 00 14 d8 ea d0 65 37 01 00 00 00 00 00
 ```
 
-Encoder: `app/src/main/java/com/ksr/spatialcopilot/model/UplinkHeader.kt`.
+Encoder: `app/src/main/java/com/drivingassist/spatialcopilot/model/UplinkHeader.kt`.
 
 YUV conversion for the JPEG is `camera/YuvJpeg.kt`. The camera pipeline stops at the socket. Nothing in this repo thresholds, Hough-transforms, or classifies a frame.
 

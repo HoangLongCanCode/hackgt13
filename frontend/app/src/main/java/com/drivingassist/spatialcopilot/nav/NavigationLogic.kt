@@ -1,16 +1,16 @@
-package com.ksr.spatialcopilot.nav
+package com.drivingassist.spatialcopilot.nav
 
-import com.ksr.spatialcopilot.model.ArrowHeading
-import com.ksr.spatialcopilot.model.DistanceFormat
-import com.ksr.spatialcopilot.model.ExitCue
-import com.ksr.spatialcopilot.model.ImageBox
-import com.ksr.spatialcopilot.model.LaneArrow
-import com.ksr.spatialcopilot.model.LaneSlot
-import com.ksr.spatialcopilot.model.NavigationCue
-import com.ksr.spatialcopilot.model.Px
-import com.ksr.spatialcopilot.model.SignMarker
-import com.ksr.spatialcopilot.model.SpatialInstruction
-import com.ksr.spatialcopilot.model.VehicleMarker
+import com.drivingassist.spatialcopilot.model.ArrowHeading
+import com.drivingassist.spatialcopilot.model.DistanceFormat
+import com.drivingassist.spatialcopilot.model.ExitCue
+import com.drivingassist.spatialcopilot.model.ImageBox
+import com.drivingassist.spatialcopilot.model.LaneArrow
+import com.drivingassist.spatialcopilot.model.LaneSlot
+import com.drivingassist.spatialcopilot.model.NavigationCue
+import com.drivingassist.spatialcopilot.model.Px
+import com.drivingassist.spatialcopilot.model.SignMarker
+import com.drivingassist.spatialcopilot.model.SpatialInstruction
+import com.drivingassist.spatialcopilot.model.VehicleMarker
 import kotlin.math.abs
 import kotlin.math.sin
 

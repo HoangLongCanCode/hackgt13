@@ -1,4 +1,4 @@
-package com.ksr.spatialcopilot
+package com.drivingassist.spatialcopilot
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -8,7 +8,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.ksr.spatialcopilot.ui.CopilotScreen
+import com.drivingassist.spatialcopilot.ui.CopilotScreen
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {

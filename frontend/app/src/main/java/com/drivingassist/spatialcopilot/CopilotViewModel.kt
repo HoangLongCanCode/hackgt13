@@ -1,15 +1,15 @@
-package com.ksr.spatialcopilot
+package com.drivingassist.spatialcopilot
 
 import android.app.Application
 import android.content.Context
 import android.os.SystemClock
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.ksr.spatialcopilot.model.SpatialInstruction
-import com.ksr.spatialcopilot.perception.LinkState
-import com.ksr.spatialcopilot.perception.PerceptionClient
-import com.ksr.spatialcopilot.perception.ServerEvent
-import com.ksr.spatialcopilot.perception.World
+import com.drivingassist.spatialcopilot.model.SpatialInstruction
+import com.drivingassist.spatialcopilot.perception.LinkState
+import com.drivingassist.spatialcopilot.perception.PerceptionClient
+import com.drivingassist.spatialcopilot.perception.ServerEvent
+import com.drivingassist.spatialcopilot.perception.World
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted

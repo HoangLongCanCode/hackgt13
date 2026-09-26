@@ -1,4 +1,4 @@
-package com.ksr.spatialcopilot.model
+package com.drivingassist.spatialcopilot.model
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray

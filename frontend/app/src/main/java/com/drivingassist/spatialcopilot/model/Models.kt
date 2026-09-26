@@ -1,4 +1,4 @@
-package com.ksr.spatialcopilot.model
+package com.drivingassist.spatialcopilot.model
 
 import java.util.Locale
 import kotlin.math.roundToInt
@@ -83,7 +83,7 @@ data class NavigationCue(
 /**
  * The only object the Spatial AR Engine reads.
  *
- * Produced either by [com.ksr.spatialcopilot.nav.NavigationLogic] from perception
+ * Produced either by [com.drivingassist.spatialcopilot.nav.NavigationLogic] from perception
  * messages, or decoded from a `spatial.instruction` WebSocket text frame.
  * Coordinates are upright image pixels, not view pixels.
  */

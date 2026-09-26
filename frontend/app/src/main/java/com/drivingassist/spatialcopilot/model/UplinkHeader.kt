@@ -1,17 +1,17 @@
-package com.ksr.spatialcopilot.model
+package com.drivingassist.spatialcopilot.model
 
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 /**
  * 24-byte little-endian camera header. Layout matches perception protocol v2:
- * magic `KSR1`, headerVersion 1, flags 0, frameId uint32, captureTimeNs int64,
+ * magic `SDC1`, headerVersion 1, flags 0, frameId uint32, captureTimeNs int64,
  * rotationDegrees uint16, reserved 0. The JPEG bytes follow immediately.
  *
  * Python: `struct.Struct("<4sHHIqHH")`.
  */
 object UplinkHeader {
-    const val MAGIC = "KSR1"
+    const val MAGIC = "SDC1"
     const val SIZE = 24
 
     fun encode(frameId: Long, captureTimeNs: Long, rotationDegrees: Int): ByteArray {
