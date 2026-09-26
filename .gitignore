@@ -1,0 +1,11 @@
+/.env
+/captured/*
+/demo_sessions/
+/android-collector/.gradle/
+/android-collector/.idea/
+/android-collector/build/
+/android-collector/app/build/
+/android-collector/local.properties
+/.idea/
+*.iml
+*.log
