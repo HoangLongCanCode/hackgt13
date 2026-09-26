@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- The perception laptop serves ws:// on a LAN address. The URL is chosen in the app. -->
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>
