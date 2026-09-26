@@ -11,6 +11,7 @@ messages: contracts/PROTOCOL_v2.md and contracts/schemas/. Run from perception_e
               [--max-in-flight 2] [--lookahead auto|SECONDS] [--start-on-connect]
   navigation: --nav-session DIR (phase1 session: sim/video) | --nav-route route.json | --nav-destination "QUERY"
               [--nav-origin "QUERY"] [--nav-provider mock|google] (live) [--phase1-dir DIR] [--node node]
+  tts:        [--no-tts] [--tts-allow-lan]   ElevenLabs proxy POST /tts, GET /tts/health (tts_proxy.py)
 
 Tablet over USB: `adb reverse tcp:8765 tcp:8765`, then the app uses ws://127.0.0.1:8765/perception.
 
@@ -64,6 +65,7 @@ from fastapi import WebSocket, WebSocketDisconnect  # noqa: E402
 from perception.common.paths import DATA_DIR, resolve_data_path  # noqa: E402
 from perception.realtime.pipeline import Item, TwoLanePipeline  # noqa: E402
 from perception.realtime.subscribers import PerceptionBus  # noqa: E402
+from perception.realtime.tts_proxy import TtsProxy, add_tts_routes  # noqa: E402
 from perception.realtime.wire import (  # noqa: E402
     UplinkError, dumps, make_error, make_hello, make_pong, make_skip, make_stats, make_update, now_ms, parse_uplink,
     to_wire)
@@ -1391,15 +1393,21 @@ def create_app(srv: Server):
     # endpoint's annotations from the module globals (a local import turns `ws` into a query param -> HTTP 403)
     from fastapi import FastAPI
 
+    # ElevenLabs proxy (POST /tts, GET /tts/health); key from the environment or perception_engine/.env
+    tts = TtsProxy.from_env(enabled=not getattr(srv.a, "no_tts", False),
+                            allow_lan=getattr(srv.a, "tts_allow_lan", False))
+
     @contextlib.asynccontextmanager
     async def lifespan(app):
         srv.aloop = asyncio.get_running_loop()
         srv.start_background()
         stats_task = asyncio.create_task(stats_loop())
+        await tts.start()                       # shared keep-alive httpx.AsyncClient on this loop
         try:
             yield
         finally:
             stats_task.cancel()
+            await tts.close()
             await asyncio.to_thread(srv.stop)
 
     async def stats_loop():
@@ -1412,6 +1420,8 @@ def create_app(srv: Server):
                     srv.errors.append(f"stats: {type(e).__name__}: {e}")
 
     app = FastAPI(title="Perception Engine (protocol v2)", lifespan=lifespan)
+    app.state.tts = tts
+    add_tts_routes(app, tts)
 
     @app.get("/health")
     async def health():
@@ -1500,6 +1510,12 @@ def build_parser() -> argparse.ArgumentParser:
                      "src/phase1 (default: env PHASE1_DIR, then <repo>/spatial)")
     nav.add_argument("--node", default="node", help="Node.js executable")
     nav.add_argument("--nav-relay-impl", default=None, help=argparse.SUPPRESS)      # module:Class (tests)
+    tts = ap.add_argument_group("text-to-speech proxy (ElevenLabs via POST /tts, GET /tts/health; key in the "
+                                "environment or perception_engine/.env)")
+    tts.add_argument("--no-tts", action="store_true", help="never call ElevenLabs: /tts answers 503 notConfigured")
+    tts.add_argument("--tts-allow-lan", action="store_true",
+                     help="accept /tts from non-loopback clients (Wi-Fi / hotspot demos); default loopback only "
+                          "(USB adb reverse arrives as 127.0.0.1)")
     return ap
 
 
@@ -1550,12 +1566,20 @@ def main(argv: Optional[list[str]] = None) -> None:
     if a.nav_session or a.nav_route or a.nav_destination:
         print("  navigation  : " + (f"sim session {a.nav_session}" if a.nav_session else
                                     f"live ({a.nav_provider}) route={a.nav_route} dest={a.nav_destination}"))
+    if a.tts_allow_lan:
+        tts_host = a.host if a.host not in ("0.0.0.0", "::", "") else (lan_ips() or ["<laptop-LAN-IP>"])[0]
+        tts_scope = "LAN clients allowed (--tts-allow-lan)"
+    else:
+        tts_host, tts_scope = "127.0.0.1", "loopback only (USB: adb reverse; --tts-allow-lan for Wi-Fi)"
+    print(f"  TTS proxy   : http://{tts_host}:{a.port}/tts   {tts_scope}; ElevenLabs {app.state.tts.state}")
     print(flush=True)
 
     import uvicorn
-    # per-message deflate off: each message is serialised once and sent as-is to every client
+    # per-message deflate off: each message is serialised once and sent as-is to every client.
+    # proxy_headers off: uvicorn otherwise trusts X-Forwarded-For from loopback, which would spoof the /tts
+    # loopback check
     uvicorn.run(app, host=a.host, port=a.port, log_level="warning", ws="websockets-sansio",
-                ws_per_message_deflate=False, ws_max_size=16 * 1024 * 1024)
+                ws_per_message_deflate=False, ws_max_size=16 * 1024 * 1024, proxy_headers=False)
     engine.close()
 
 
