@@ -37,6 +37,7 @@ import logging
 import math
 import os
 import queue
+import re
 import shutil
 import subprocess
 import threading
@@ -57,8 +58,19 @@ SETUP_HINT = (
 )
 
 
+_KEY_PARAM = re.compile(r"(?<![A-Za-z0-9_])(key=)[^&#\s'\"]+", re.IGNORECASE)
+
+
+def redact(text: object) -> str:
+    """Error text goes to the log and to every connected client: never let a `key=` URL parameter through."""
+    return _KEY_PARAM.sub(r"\1REDACTED", str(text))
+
+
 class NavRelayError(RuntimeError):
     """The navigation relay cannot do what was asked (setup, bad session, dead child...)."""
+
+    def __init__(self, message: object = "") -> None:
+        super().__init__(redact(message))
 
 
 class _ChildDied(Exception):
@@ -286,6 +298,7 @@ class NavRelay:
         return message
 
     def _no_packet(self, why: str) -> None:
+        why = redact(why)
         self.last_error = why
         self._warn(why)
         return None

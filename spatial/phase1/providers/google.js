@@ -7,13 +7,13 @@ function stripHtml(value) {
 
 function normalizeManeuver(maneuver) {
   const value = String(maneuver || '').toLowerCase();
-  if (value.includes('turn-left') || value.includes('left')) return 'left';
-  if (value.includes('turn-right') || value.includes('right')) return 'right';
+  // Specific maneuvers first: 'keep-left', 'fork-right', 'ramp-left' also contain 'left' / 'right'.
+  if (value.includes('keep-left') || value.includes('fork-left') || value.includes('ramp-left')) return 'keep_left';
+  if (value.includes('keep-right') || value.includes('fork-right') || value.includes('ramp-right')) return 'keep_right';
   if (value.includes('merge')) return 'merge';
-  if (value.includes('ferry')) return 'straight';
-  if (value.includes('keep-left')) return 'keep_left';
-  if (value.includes('keep-right')) return 'keep_right';
-  if (value.includes('roundabout')) return 'straight';
+  if (value.includes('ferry') || value.includes('roundabout')) return 'straight';
+  if (value.includes('left')) return 'left';
+  if (value.includes('right')) return 'right';
   return 'straight';
 }
 

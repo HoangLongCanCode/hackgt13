@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "commonjs",
-  "main": "src/phase1/index.js",
+  "main": "phase1/index.js",
   "scripts": {
     "demo:phase1": "node scripts/run-phase1-demo.js",
     "pull:android": "node scripts/pull-android-capture.js",

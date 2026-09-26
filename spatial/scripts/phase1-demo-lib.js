@@ -1,8 +1,8 @@
 // Shared helpers for generating and replaying the local Phase 1 demo sessions.
 const fs = require('fs');
 const path = require('path');
-const { loadPhase1Session, buildSpatialNavigationPacket } = require('../src/phase1');
-const { buildRouteSnapshot, sampleRouteTripStates } = require('../src/phase1/capture');
+const { loadPhase1Session, buildSpatialNavigationPacket } = require('../phase1');
+const { buildRouteSnapshot, sampleRouteTripStates } = require('../phase1/capture');
 
 const demoDir = path.join(__dirname, '..', 'demo_sessions', 'session_a_to_b');
 

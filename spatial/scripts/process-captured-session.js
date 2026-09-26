@@ -2,7 +2,7 @@
 require('./load-env').loadEnv();
 const fs = require('fs');
 const path = require('path');
-const { loadPhase1Session, buildSpatialNavigationPacket, buildRouteSnapshot } = require('../src/phase1');
+const { loadPhase1Session, buildSpatialNavigationPacket, buildRouteSnapshot } = require('../phase1');
 
 const DEFAULT_CAPTURE_ROOT = path.join(process.cwd(), 'captured', 'android');
 const DEFAULT_ORIGIN_QUERY = 'Amtrak station in Atlanta';
