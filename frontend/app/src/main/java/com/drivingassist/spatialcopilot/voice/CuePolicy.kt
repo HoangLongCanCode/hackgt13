@@ -3,6 +3,8 @@ package com.drivingassist.spatialcopilot.voice
 import com.drivingassist.copilot.context.DrivingContext
 import com.drivingassist.copilot.context.FollowingInfo
 import com.drivingassist.copilot.context.FollowingState
+import com.drivingassist.copilot.context.LaneAction
+import com.drivingassist.copilot.context.LaneGuidance
 import com.drivingassist.copilot.context.Maneuver
 import com.drivingassist.copilot.context.Priority
 import com.drivingassist.copilot.context.WorldSnapshot
@@ -40,6 +42,10 @@ data class CueRequest(
     val profile: String,
     val createdMs: Long,
     val ttlMs: Long,
+    /** A fixed phrase to play instead when [text] has no audio by its readiness deadline ("Take the exit."). */
+    val fallbackText: String? = null,
+    /** The route event of a nav stage or lane cue: an IMMEDIATE prompt cuts an UPCOMING one of the same event (7.2). */
+    val eventKey: String? = null,
 )
 
 /**
@@ -52,9 +58,16 @@ data class CueRequest(
  * earcon alone. (The spec also allows a repeat on escalation inside an episode; this build does not, so a
  * warning never repeats while TOO CLOSE holds.)
  *
+ * Lane change: `lane.change_left` / `lane.change_right` once per (event key, side) when the Driving
+ * Context has asked for that side for `stableMs` on fresh, confident lanes that saw lines, with room to say it
+ * before the immediate prompt is due ("Move to the right lane for the exit, check for cars.": the driver is
+ * asked to look; the lane is never called free). A middle target lane says the side only ("Move right ...").
+ * At most `maxPresentationsPerEventKey` presentations per event key; the lane cue is the one left out.
+ *
  * Implemented cues: safety.vehicle_too_close, safety.pedestrian_critical, alert.pedestrian,
- * alert.red_light, info.road_alerts_paused / back, nav.start, nav.prepare, nav.immediate,
- * nav.arrive_prepare, nav.arrived. The catalog's off-by-default cues are not implemented.
+ * alert.red_light, info.road_alerts_paused / back, nav.start, nav.continue, nav.prepare, nav.immediate,
+ * nav.arrive_prepare, nav.arrived, lane.change_left / right. The catalog's off-by-default cues are not
+ * implemented.
  */
 class CuePolicy(private val catalog: CueCatalog) {
 
@@ -94,10 +107,28 @@ class CuePolicy(private val catalog: CueCatalog) {
     private var routeSeenMs = 0L
     private var startSpoken = false
     private val navSpoken = HashSet<String>()
+    private var eventKey: String? = null
+    private var eventSeenMs = 0L
+
+    // --- lane change --------------------------------------------------------------------------------
+    private var laneSince: Long? = null
+    /** (cue, event key) the stable time is running for. */
+    private var laneTimerKey: String? = null
+    private val laneSpoken = HashSet<String>()
+
+    /** Key of the lane cue whose condition (all but the stable time) held on the last step, and when it last held. */
+    private var laneValidKey: String? = null
+    private var laneValidMs = 0L
+    private var stepMs = 0L
+
+    /** The lane cue's inputs on the last step, for the voice log when a queued lane cue is dropped. */
+    var laneState: String = ""
+        private set
 
     fun step(input: PolicyInput): List<CueRequest> {
         val out = ArrayList<CueRequest>()
         val now = input.nowMs
+        stepMs = now
         val ctx = input.context
         val perceptionOk = !ctx.perceptionStale && input.linkConnected && !input.takenOver
         if (perceptionOk) { if (perceptionGoodSince == null) perceptionGoodSince = now } else perceptionGoodSince = null
@@ -110,6 +141,7 @@ class CuePolicy(private val catalog: CueCatalog) {
         redLight(input, perceptionGates, out)
         roadAlerts(input, common, out)
         navigation(input, common && !input.takenOver, out)
+        laneChange(input, perceptionGates, out)
         return out
     }
 
@@ -118,9 +150,18 @@ class CuePolicy(private val catalog: CueCatalog) {
         when (r.cueId) {
             VTC -> { vtcArmed = true; vtcLastSpeechMs = vtcPendingPrevSpeech }
             PED_CRIT -> pedCritCount = (pedCritCount - 1).coerceAtLeast(0)
+            LANE_LEFT, LANE_RIGHT -> laneSpoken.remove(r.key)
             else -> if (r.cueId.startsWith("nav.")) navSpoken.remove(r.key)
         }
     }
+
+    /**
+     * Re-validation of a queued [r] before it starts, on the last step's state: a lane cue needs the same
+     * side and event key to still hold every condition but the stable time (lane quality may have dipped for at
+     * most [LANE_QUALITY_GRACE_MS]). Other cues: true.
+     */
+    fun stillValid(r: CueRequest): Boolean =
+        if (r.cueId == LANE_LEFT || r.cueId == LANE_RIGHT) r.key == laneValidKey && stepMs - laneValidMs <= LANE_QUALITY_GRACE_MS else true
 
     // ------------------------------------------------------------------------------------------------
 
@@ -241,6 +282,11 @@ class CuePolicy(private val catalog: CueCatalog) {
             routeSeenMs = now
             startSpoken = false
             navSpoken.clear()
+            laneSpoken.clear()
+        }
+        if (r.eventKey != eventKey) {
+            eventKey = r.eventKey
+            eventSeenMs = now
         }
         if (!gates || r.stale || r.offRoute) return
         if (now - routeSeenMs < SETTLE_MS) return
@@ -251,33 +297,156 @@ class CuePolicy(private val catalog: CueCatalog) {
             out += request(spec, "Starting route to your destination.", "nav.start/${r.routeKey}", now)
         }
         val d = input.routeDistanceMeters ?: return
-        val v = (r.speedMps ?: nav["defaultSpeedMps"] ?: 11.2).coerceIn(0.5, 45.0)
+        val v = navSpeed(r)
         val lead = nav["leadS"] ?: 1.0
-        val imm = (v * (nav["immediate.seconds"] ?: 7.0)).coerceIn(nav["immediate.minMeters"] ?: 45.0, nav["immediate.maxMeters"] ?: 200.0)
+        val imm = immediateMeters(v)
         val prep = prepareMeters(v)
         val skipIfImmediateS = nav["skipPrepareIfImmediateWithinS"] ?: 4.0
         val minExec = nav["minExecutableMeters"] ?: 10.0
+        // A far, settled target: "Drive straight for three miles." Only continueMinGapSeconds of travel or more
+        // before the prepare window, so it is never followed right away by nav.prepare with the same distance.
+        // Not for FOLLOW_ROAD / STOP (no maneuver to drive to).
+        val continueMin = max((nav["continueMinSeconds"] ?: 60.0) * v, nav["continueMinMeters"] ?: 1_609.344)
+        val continueGap = v * (nav["continueMinGapSeconds"] ?: 30.0)
+        val hasPrompt = r.maneuver == Maneuver.ARRIVE || SpokenText.maneuver(r) != null
+        if (hasPrompt && now - eventSeenMs >= SETTLE_MS && d >= continueMin && d - (prep + v * lead) >= continueGap) {
+            SpokenText.distance(d - v * lead)?.let { words ->
+                val text = catalog[CONTINUE].text?.replace("{distance}", words)
+                fitting(CONTINUE, text)?.let { once(out, CONTINUE, r.eventKey, "continue", it, now) }
+            }
+        }
         if (r.maneuver == Maneuver.ARRIVE) {
             val arrived = nav["arrivedMeters"] ?: 15.0
             if (d <= arrived) {
-                if (!(input.live && r.provider == "mock")) once(out, "nav.arrived", "${r.eventKey}:arrived", "You have arrived at your destination.", now)
+                if (!(input.live && r.provider == "mock")) once(out, "nav.arrived", r.eventKey, "arrived", "You have arrived at your destination.", now)
             } else if (d <= prep + v * lead && d - arrived >= v * skipIfImmediateS) {
-                SpokenText.distance(d - v * lead)?.let { once(out, "nav.arrive_prepare", "${r.eventKey}:prepare", SpokenText.arrivePrepare(it), now) }
+                SpokenText.distance(d - v * lead)?.let { once(out, "nav.arrive_prepare", r.eventKey, "prepare", SpokenText.arrivePrepare(it), now) }
             }
             return
         }
-        SpokenText.maneuver(r.maneuver) ?: return // nothing to say for FOLLOW_ROAD / STOP
+        if (!hasPrompt) return // nothing to say for FOLLOW_ROAD / STOP
+        // An exit says its number ("Take exit ninety-four."); a sentence over its word budget drops the number.
         if (d in minExec..imm) {
             val uncertain = input.live && (input.gpsAccuracyMeters == null || input.gpsAccuracyMeters > (nav["immediateMaxAccuracyMeters"] ?: 20.0))
             if (input.live && input.gpsAccuracyMeters != null && d < input.gpsAccuracyMeters) return
             val words = if (uncertain) SpokenText.distance(d - v * lead) else null
-            val text = if (words != null) SpokenText.prepare(words, r.maneuver) else SpokenText.immediate(r.maneuver)
-            text?.let { once(out, "nav.immediate", "${r.eventKey}:immediate", it, now) }
+            val banked = SpokenText.immediate(r, withExitNumber = false)
+            val text = if (words != null) {
+                fitting(IMMEDIATE, SpokenText.prepare(words, r), SpokenText.prepare(words, r, withExitNumber = false), SpokenText.immediate(r), banked)
+            } else {
+                fitting(IMMEDIATE, SpokenText.immediate(r), banked)
+            }
+            // The banked bare form stands in only when the position is certain: in the LIVE uncertain case the
+            // distance sentence waits for its own audio (6.5), it never falls back to "Turn right.".
+            text?.let { once(out, IMMEDIATE, r.eventKey, "immediate", it, now, fallback = banked.takeIf { !uncertain }) }
         } else if (d <= prep + v * lead && d - imm >= v * skipIfImmediateS) {
             SpokenText.distance(d - v * lead)?.let { words ->
-                SpokenText.prepare(words, r.maneuver)?.let { once(out, "nav.prepare", "${r.eventKey}:prepare", it, now) }
+                fitting(PREPARE, SpokenText.prepare(words, r), SpokenText.prepare(words, r, withExitNumber = false))
+                    ?.let { once(out, PREPARE, r.eventKey, "prepare", it, now) }
             }
         }
+    }
+
+    private fun laneChange(input: PolicyInput, gates: Boolean, out: MutableList<CueRequest>) {
+        val g = input.context.laneGuidance
+        val id = when (g?.action) {
+            LaneAction.CHANGE_LANE_LEFT -> LANE_LEFT
+            LaneAction.CHANGE_LANE_RIGHT -> LANE_RIGHT
+            else -> null
+        }
+        val r = input.route
+        val spec = id?.let { catalog[it] }
+        val text = if (spec != null && r != null && g != null) laneText(spec, r, g, input.context.navigation?.laneHintInferred == true) else null
+        laneState = "action ${g?.action} gates $gates d ${input.routeDistanceMeters?.toInt()} v ${r?.let { navSpeed(it).toInt() }} " +
+            "conf ${input.world.lanes?.lanes?.confidence} lines ${input.world.lanes?.lanes?.laneBoundaries?.size} key ${r?.eventKey}"
+        if (spec == null || r == null || text == null || !laneHolds(input, gates, spec, r, text)) { laneSince = null; laneValidKey = null; return }
+        val now = input.nowMs
+        val key = "${spec.id}/${r.eventKey}"
+        if (!laneQuality(input, spec)) {
+            // A lane-quality dip (confidence, age, a run without lines) restarts the stable time, but a queued cue of
+            // the same side and event key stays valid for LANE_QUALITY_GRACE_MS: one weak run must not discard it.
+            laneSince = null
+            if (laneValidKey != key) laneValidKey = null
+            return
+        }
+        // Any violation (above), a side change or a new event key restarts the stable time.
+        if (laneSince == null || laneTimerKey != key) { laneSince = now; laneTimerKey = key }
+        laneValidKey = key
+        laneValidMs = now
+        if (now - laneSince!! < (spec.numbers["stableMs"] ?: 1_500.0)) return
+        if (key in laneSpoken || !laneFits(r, input.routeDistanceMeters!!)) return
+        laneSpoken += key
+        out += request(spec, text, key, now, r.eventKey)
+    }
+
+    /**
+     * Every lane-cue condition but the stable time and the lane quality (AUDIO_CUE_RULES.md 6.5): the PERCEPTION
+     * gates, a route that is neither stale nor off route, an inferred side only when the catalog allows it, and a
+     * known distance with room to say [text] before the immediate prompt is due: `d - I(v) >= v x (its duration +
+     * 1 s)`, the same margin as nav.prepare at bind (7.3 item 6).
+     */
+    private fun laneHolds(input: PolicyInput, gates: Boolean, spec: CueSpec, r: RouteGuide, text: String): Boolean {
+        val d = input.routeDistanceMeters ?: return false
+        val v = navSpeed(r)
+        val inferredOk = input.context.navigation?.laneHintInferred != true || spec.flags["allowInferredLaneSide"] == true
+        return gates && spec.enabledByDefault && !r.stale && !r.offRoute && inferredOk &&
+            d - immediateMeters(v) >= v * (spokenSeconds(text) + 1.0)
+    }
+
+    /** The lane model's run is usable for the cue: it saw lines, is fresh and confident (6.5). */
+    private fun laneQuality(input: PolicyInput, spec: CueSpec): Boolean {
+        val n = spec.numbers
+        val lanes = input.world.lanes ?: return false
+        return lanes.lanes.laneBoundaries.isNotEmpty() && lanes.ageSeconds <= (n["maxAgeSeconds"] ?: 1.0) &&
+            lanes.lanes.confidence >= (n["minConfidence"] ?: 0.6)
+    }
+
+    /**
+     * At most `maxPresentationsPerEventKey` (3) per event key, the lane cue dropped first (6.5): the stages and lane
+     * cues already made plus the stages still due (the final prompt; nav.prepare while its window is ahead).
+     */
+    private fun laneFits(r: RouteGuide, d: Double): Boolean {
+        val ev = r.eventKey
+        val v = navSpeed(r)
+        val made = NAV_STAGES.count { "$ev:$it" in navSpoken } + listOf(LANE_LEFT, LANE_RIGHT).count { "$it/$ev" in laneSpoken }
+        val last = if (r.maneuver == Maneuver.ARRIVE) "arrived" else "immediate"
+        val due = (if ("$ev:$last" in navSpoken) 0 else 1) +
+            (if ("$ev:prepare" !in navSpoken && d > prepareMeters(v) + v * (catalog.nav["leadS"] ?: 1.0)) 1 else 0)
+        return made + due < (catalog.nav["maxPresentationsPerEventKey"] ?: 3.0).toInt()
+    }
+
+    /**
+     * "Move to the right lane ..." only when the target is that edge lane (the rightmost for right, lane 1 for left,
+     * or a side inferred from the maneuver); a middle target (a numeric requiredLane) says the side only ("Move right
+     * ..."), never a lane number. Then "... for the turn" (TURN_LEFT / TURN_RIGHT), "... for the exit"
+     * ([RouteGuide.isExit]), else the plain text.
+     */
+    private fun laneText(spec: CueSpec, r: RouteGuide, g: LaneGuidance, inferred: Boolean): String? {
+        val edge = inferred || if (spec.id == LANE_RIGHT) g.laneCount?.let { it in g.targetLanes } == true else 1 in g.targetLanes
+        val base = if (edge) "text" else "textSide"
+        val forWhat = when {
+            r.isExit -> "ForExit"
+            r.maneuver == Maneuver.TURN_LEFT || r.maneuver == Maneuver.TURN_RIGHT -> "ForTurn"
+            else -> ""
+        }
+        return spec.texts["$base$forWhat"] ?: spec.texts[base]
+    }
+
+    /** The spec's timing model for an utterance: `words / 2.6 + 0.2 s`. */
+    private fun spokenSeconds(text: String): Double = CueCatalog.words(text) / 2.6 + 0.2
+
+    private fun navSpeed(r: RouteGuide): Double = (r.speedMps ?: catalog.nav["defaultSpeedMps"] ?: 11.2).coerceIn(0.5, 45.0)
+
+    /** I(v): where the immediate prompt is due. */
+    private fun immediateMeters(v: Double): Double {
+        val nav = catalog.nav
+        return (v * (nav["immediate.seconds"] ?: 7.0)).coerceIn(nav["immediate.minMeters"] ?: 45.0, nav["immediate.maxMeters"] ?: 200.0)
+    }
+
+    /** The first candidate that matches the speech regex and fits [cueId]'s word budget. */
+    private fun fitting(cueId: String, vararg candidates: String?): String? {
+        val priority = catalog[cueId].priority
+        return candidates.firstOrNull { it != null && catalog.fits(it, priority) }
     }
 
     private fun prepareMeters(v: Double): Double {
@@ -290,13 +459,15 @@ class CuePolicy(private val catalog: CueCatalog) {
         return 300.0
     }
 
-    private fun once(out: MutableList<CueRequest>, cueId: String, key: String, text: String, now: Long) {
+    /** One nav stage ([NAV_STAGES]) of [eventKey], keyed `<eventKey>:<stage>`, at most once. */
+    private fun once(out: MutableList<CueRequest>, cueId: String, eventKey: String, stage: String, text: String, now: Long, fallback: String? = null) {
+        val key = "$eventKey:$stage"
         if (!navSpoken.add(key)) return
         val spec = catalog[cueId]
-        out += request(spec, text, key, now)
+        out += request(spec, text, key, now, eventKey).copy(fallbackText = fallback?.takeIf { it != text })
     }
 
-    private fun request(spec: CueSpec, text: String?, key: String, now: Long) = CueRequest(
+    private fun request(spec: CueSpec, text: String?, key: String, now: Long, eventKey: String? = null) = CueRequest(
         cueId = spec.id,
         key = key,
         priority = spec.priority,
@@ -305,6 +476,7 @@ class CuePolicy(private val catalog: CueCatalog) {
         profile = spec.voiceProfile,
         createdMs = now,
         ttlMs = spec.ttlMs,
+        eventKey = eventKey,
     )
 
     companion object {
@@ -314,9 +486,18 @@ class CuePolicy(private val catalog: CueCatalog) {
         const val RED = "alert.red_light"
         const val PAUSED = "info.road_alerts_paused"
         const val BACK = "info.road_alerts_back"
+        const val CONTINUE = "nav.continue"
+        const val PREPARE = "nav.prepare"
+        const val IMMEDIATE = "nav.immediate"
+        const val LANE_LEFT = "lane.change_left"
+        const val LANE_RIGHT = "lane.change_right"
+        /** The per-event-key nav stages ([once] keys `<eventKey>:<stage>`; nav.arrive_prepare uses `prepare`). */
+        val NAV_STAGES = listOf("continue", "prepare", "immediate", "arrived")
         const val WARMUP_MS = 500L
         const val WINDOW_MS = 3_000L
         const val STALE_MS = 2_500L
         const val SETTLE_MS = 500L
+        /** A queued lane cue survives a lane-quality dip this long (lane confidence on real clips hovers around 0.6). */
+        const val LANE_QUALITY_GRACE_MS = 500L
     }
 }

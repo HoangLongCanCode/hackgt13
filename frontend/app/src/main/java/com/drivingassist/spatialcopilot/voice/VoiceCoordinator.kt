@@ -153,7 +153,8 @@ class VoiceCoordinator(context: Context, private val parent: CoroutineScope) {
             val input = PolicyInput(
                 nowMs = now,
                 context = session.context.value,
-                world = session.bridge?.world?.value ?: WorldSnapshot.EMPTY,
+                // DEMO has no bridge: its scripted world (lanes included) stands in.
+                world = session.bridge?.world?.value ?: if (session.settings.mode == SourceMode.DEMO) session.displayWorld() else WorldSnapshot.EMPTY,
                 linkConnected = connected,
                 takenOver = takenOver,
                 simPaused = simPaused,
@@ -167,7 +168,11 @@ class VoiceCoordinator(context: Context, private val parent: CoroutineScope) {
                 prepare(r)
                 for (d in arbiter.offer(r, now)) handle(d, arbiter, policy, bus, now)
             }
-            val decisions = arbiter.tick(now, ready = { isReady(it, now) }, gateOpen = { !blocked && !(takenOver && it.cueId != CuePolicy.PAUSED) })
+            val decisions = arbiter.tick(
+                now,
+                ready = { isReady(it, now) },
+                gateOpen = { !blocked && !(takenOver && it.cueId != CuePolicy.PAUSED) && policy.stillValid(it) },
+            )
             for (d in decisions) handle(d, arbiter, policy, bus, now)
             delay(STEP_MS)
         }
@@ -177,11 +182,19 @@ class VoiceCoordinator(context: Context, private val parent: CoroutineScope) {
 
     private fun handle(d: VoiceArbiter.Decision, arbiter: VoiceArbiter, policy: CuePolicy, bus: VoiceBus, now: Long) {
         when (d) {
-            is VoiceArbiter.Decision.Drop -> { policy.onDropped(d.request); Log.i(TAG, "drop ${d.request.cueId} (${d.reason})") }
+            is VoiceArbiter.Decision.Drop -> {
+                policy.onDropped(d.request)
+                val lane = if (d.request.cueId == CuePolicy.LANE_LEFT || d.request.cueId == CuePolicy.LANE_RIGHT) " ${policy.laneState}" else ""
+                Log.i(TAG, "drop ${d.request.cueId} (${d.reason})$lane")
+            }
             is VoiceArbiter.Decision.Cut -> { bus.cut(); Log.i(TAG, "cut ${d.request.cueId}") }
             is VoiceArbiter.Decision.Play -> {
                 val r = d.request
-                val speech = r.text?.let { pack[key(r.profile, it)] ?: pendingClips.remove(key(r.profile, it)) }
+                val clip = r.text?.let { pack[key(r.profile, it)] ?: pendingClips.remove(key(r.profile, it)) }
+                // No audio for the sentence by its deadline: the banked street-less form (AUDIO_CUE_RULES.md 10.3 rule 4).
+                val banked = if (clip == null) r.fallbackText?.let { pack[key(r.profile, it)] } else null
+                val speech = clip ?: banked
+                val spoken = if (clip == null && banked != null) r.fallbackText else r.text
                 val lead = Earcons.lead(r.earcon, alone = speech == null)
                 val pcm = when {
                     speech != null && lead != null -> Earcons.concat(lead, speech)
@@ -190,7 +203,7 @@ class VoiceCoordinator(context: Context, private val parent: CoroutineScope) {
                     else -> { arbiter.finished(now); policy.onDropped(r); Log.i(TAG, "nothing to play for ${r.cueId}"); return }
                 }
                 arbiter.started(r, now, pcm.size * 1000L / Earcons.RATE)
-                Log.i(TAG, "play ${r.cueId} src=${if (speech == null) "earcon" else "clip"} \"${r.text ?: ""}\"")
+                Log.i(TAG, "play ${r.cueId} src=${if (speech == null) "earcon" else if (clip == null) "banked" else "clip"} \"${spoken ?: ""}\"")
                 bus.play(pcm, r.priority == Priority.CRITICAL_SAFETY) { finishedKeys.add(r.key) }
             }
         }
@@ -217,8 +230,11 @@ class VoiceCoordinator(context: Context, private val parent: CoroutineScope) {
         val text = r.text ?: return true
         val k = key(r.profile, text)
         if (pack.containsKey(k) || pendingClips.containsKey(k)) return true
+        val late = now - r.createdMs > deadline(r.priority)
+        // Past the deadline with a banked fallback in RAM ("Take the exit."): that plays instead.
+        if (late && r.fallbackText?.let { pack.containsKey(key(r.profile, it)) } == true) return true
         // Past the deadline and still fetching: keep waiting (until the TTL drops it); a failed fetch gives up.
-        return !fetching.contains(k) && now - r.createdMs > deadline(r.priority)
+        return !fetching.contains(k) && late
     }
 
     private fun deadline(p: Priority): Long = when (p) {

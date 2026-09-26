@@ -119,8 +119,8 @@
     },
     {
       "id": "nav.continue", "class": "NAVIGATION", "family": "nav", "priority": "UPCOMING_NAVIGATION", "enabledByDefault": true, "scope": "eventKey",
-      "trigger": "a new settled target with d >= max(continueMinSeconds * v, continueMinMeters)",
-      "template": "Continue for {distance}.", "lateBinding": ["distance"], "voiceProfile": "nav"
+      "trigger": "once per eventKey: a settled target (a spoken maneuver or ARRIVE; not FOLLOW_ROAD or STOP) with d >= max(continueMinSeconds * v, continueMinMeters) and d - (P(v) + v * leadS) >= v * continueMinGapSeconds, so it never plays right before nav.prepare (nor in the same step as nav.prepare / nav.immediate)",
+      "template": "Drive straight for {distance}.", "lateBinding": ["distance"], "voiceProfile": "nav"
     },
     {
       "id": "nav.prepare", "class": "NAVIGATION", "family": "nav", "priority": "UPCOMING_NAVIGATION", "enabledByDefault": true, "scope": "eventKey",
@@ -159,18 +159,22 @@
       "trigger": "navigation.stale becomes true while a route was active (LIVE, or SIM playing)", "text": "Navigation paused.", "voiceProfile": "nav"
     },
     {
-      "id": "lane.change_left", "class": "PERCEPTION", "family": "lane", "priority": "UPCOMING_NAVIGATION", "enabledByDefault": false, "flag": "speakLaneChange", "scope": "eventKey",
-      "trigger": "laneGuidance.action == CHANGE_LANE_LEFT for stableMs, lanes confidence >= minConfidence over that time, lanes age <= maxAgeSeconds, not off route, d > I(v), laneHintInferred == false unless allowInferredLaneSide",
-      "stableMs": 3000, "minConfidence": 0.7, "maxAgeSeconds": 1.0, "neverCuts": true, "ttlMs": 3000,
-      "text": "Left lane for the turn.", "textForExit": "Left lane for the exit.", "voiceProfile": "nav",
-      "revalidate": "action unchanged, confidence still >= minConfidence, every PERCEPTION gate holds"
+      "id": "lane.change_left", "class": "PERCEPTION", "family": "lane", "priority": "UPCOMING_NAVIGATION", "enabledByDefault": true, "flag": "speakLaneChange", "scope": "eventKey",
+      "trigger": "laneGuidance.action == CHANGE_LANE_LEFT continuously for stableMs with world lanes that saw lines (laneBoundaries not empty), confidence >= minConfidence and age <= maxAgeSeconds the whole time (any violation or a side change restarts it); every PERCEPTION gate; route present, not stale, not off route; d known and d - I(v) >= v * (duration + 1 s) for its text; laneHintInferred == false unless allowInferredLaneSide; once per (eventKey, side), a dropped request re-arms; not made when the event key already has, or still has due, maxPresentationsPerEventKey presentations",
+      "stableMs": 1500, "minConfidence": 0.6, "maxAgeSeconds": 1.0, "allowInferredLaneSide": true, "neverCuts": true, "ttlMs": 3000,
+      "text": "Move to the left lane, check for cars.", "textForTurn": "Move to the left lane for the turn, check for cars.", "textForExit": "Move to the left lane for the exit, check for cars.",
+      "textSide": "Move left, check for cars.", "textSideForTurn": "Move left for the turn, check for cars.", "textSideForExit": "Move left for the exit, check for cars.", "voiceProfile": "nav",
+      "note": "check for cars asks the driver to look; it never says the lane is free. TURN_LEFT / TURN_RIGHT use textForTurn, an exit (EXIT, or KEEP_* with an exit number) textForExit, anything else text. text / textForTurn / textForExit name the edge lane ('the right lane'), so they are used only when the target lanes include the edge lane on that side (laneCount for right, 1 for left) or the side was inferred; a middle target (a numeric requiredLane) uses textSide / textSideForTurn / textSideForExit, which say the side only. No lane number or count is spoken",
+      "revalidate": "at start the same side and event key still hold every condition but the stable time"
     },
     {
-      "id": "lane.change_right", "class": "PERCEPTION", "family": "lane", "priority": "UPCOMING_NAVIGATION", "enabledByDefault": false, "flag": "speakLaneChange", "scope": "eventKey",
-      "trigger": "laneGuidance.action == CHANGE_LANE_RIGHT for stableMs, lanes confidence >= minConfidence over that time, lanes age <= maxAgeSeconds, not off route, d > I(v), laneHintInferred == false unless allowInferredLaneSide",
-      "stableMs": 3000, "minConfidence": 0.7, "maxAgeSeconds": 1.0, "neverCuts": true, "ttlMs": 3000,
-      "text": "Right lane for the turn.", "textForExit": "Right lane for the exit.", "voiceProfile": "nav",
-      "revalidate": "action unchanged, confidence still >= minConfidence, every PERCEPTION gate holds"
+      "id": "lane.change_right", "class": "PERCEPTION", "family": "lane", "priority": "UPCOMING_NAVIGATION", "enabledByDefault": true, "flag": "speakLaneChange", "scope": "eventKey",
+      "trigger": "laneGuidance.action == CHANGE_LANE_RIGHT continuously for stableMs with world lanes that saw lines (laneBoundaries not empty), confidence >= minConfidence and age <= maxAgeSeconds the whole time (any violation or a side change restarts it); every PERCEPTION gate; route present, not stale, not off route; d known and d - I(v) >= v * (duration + 1 s) for its text; laneHintInferred == false unless allowInferredLaneSide; once per (eventKey, side), a dropped request re-arms; not made when the event key already has, or still has due, maxPresentationsPerEventKey presentations",
+      "stableMs": 1500, "minConfidence": 0.6, "maxAgeSeconds": 1.0, "allowInferredLaneSide": true, "neverCuts": true, "ttlMs": 3000,
+      "text": "Move to the right lane, check for cars.", "textForTurn": "Move to the right lane for the turn, check for cars.", "textForExit": "Move to the right lane for the exit, check for cars.",
+      "textSide": "Move right, check for cars.", "textSideForTurn": "Move right for the turn, check for cars.", "textSideForExit": "Move right for the exit, check for cars.", "voiceProfile": "nav",
+      "note": "check for cars asks the driver to look; it never says the lane is free. TURN_LEFT / TURN_RIGHT use textForTurn, an exit (EXIT, or KEEP_* with an exit number) textForExit, anything else text. text / textForTurn / textForExit name the edge lane ('the right lane'), so they are used only when the target lanes include the edge lane on that side (laneCount for right, 1 for left) or the side was inferred; a middle target (a numeric requiredLane) uses textSide / textSideForTurn / textSideForExit, which say the side only. No lane number or count is spoken",
+      "revalidate": "at start the same side and event key still hold every condition but the stable time"
     }
   ],
   "neverSpoken": [
@@ -180,8 +184,8 @@
   ],
   "eventDispositions": {
     "KEEP_LANE": { "audio": "displayOnly" },
-    "CHANGE_LANE_LEFT": { "audio": "offByDefault", "cues": ["lane.change_left"] },
-    "CHANGE_LANE_RIGHT": { "audio": "offByDefault", "cues": ["lane.change_right"] },
+    "CHANGE_LANE_LEFT": { "audio": "spoken", "cues": ["lane.change_left"] },
+    "CHANGE_LANE_RIGHT": { "audio": "spoken", "cues": ["lane.change_right"] },
     "MERGE_LEFT": { "audio": "spoken", "cues": ["nav.prepare", "nav.immediate"] },
     "MERGE_RIGHT": { "audio": "spoken", "cues": ["nav.prepare", "nav.immediate"] },
     "MERGE": { "audio": "spoken", "cues": ["nav.prepare", "nav.immediate"] },
@@ -191,7 +195,7 @@
     "TURN_RIGHT": { "audio": "spoken", "cues": ["nav.prepare", "nav.immediate"] },
     "EXIT": { "audio": "spoken", "cues": ["nav.prepare", "nav.immediate"] },
     "ENTER_HIGHWAY": { "audio": "spoken", "cues": ["nav.prepare", "nav.immediate"] },
-    "FOLLOW_ROAD": { "audio": "longSegmentsOnly", "cues": ["nav.continue"], "note": "from GO_STRAIGHT or START_ROUTE only; an unknown engine type is display only (drop(unknownManeuver))" },
+    "FOLLOW_ROAD": { "audio": "displayOnly", "note": "GO_STRAIGHT / START_ROUTE legs are skipped for the next real maneuver, whose nav.continue says Drive straight for {distance} when it is far; a FOLLOW_ROAD target (nothing but road ahead, or an unknown engine type) is not spoken" },
     "STOP": { "audio": "displayOnly" },
     "ARRIVE": { "audio": "spoken", "cues": ["nav.arrive_prepare", "nav.arrived"] },
     "VEHICLE_TOO_CLOSE": { "audio": "spokenWhenVoiced", "cues": ["safety.vehicle_too_close"] },
@@ -227,6 +231,7 @@
     "thenChain": { "seconds": 12, "minMeters": 60 },
     "continueMinSeconds": 60,
     "continueMinMeters": 1609.344,
+    "continueMinGapSeconds": 30,
     "settle": { "ms": 500, "packets": 2 },
     "simLeftoverMaxSeconds": 2.0,
     "targetSkipsTypes": ["GO_STRAIGHT", "START_ROUTE"],
@@ -278,7 +283,8 @@
     "onto": " onto {street}; omitted when street is missing or longer than 4 words after normalization; google provider: keep only the text after the last ' onto ', else omit",
     "then": ", then {maneuver of next} (no onto) or ', then arrive at {destination}' when next.distanceMeters - target.distanceMeters <= max(12 s * v, 60 m)",
     "destination": "text of packet.destination.label before the first comma, normalized; 'your destination' when missing, containing digits, or longer than 4 words",
-    "distance": "speakDistance(d - v * leadS), rendered when the cue is bound"
+    "distance": "speakDistance(d - v * leadS), rendered when the cue is bound",
+    "exitNumberWords": "for an exit (EXIT, or KEEP_LEFT / KEEP_RIGHT with an exit number): the exit number trimmed must match ^(\\d{1,3})([A-Za-z])?$; 1-99 in words (ninety-four), 100-999 in groups (two fifty, one oh five, three hundred), an optional letter as a capital (twenty-three B); anything else uses the fallback take the exit. When a sentence with the number exceeds its word budget, the fallback is used"
   },
   "speakDistanceImperial": {
     "note": "Round feet to the nearest 100 first (half up). If that is <= 1000 ft, speak feet; otherwise use the mile bands on the unrounded miles.",
@@ -314,10 +320,18 @@
     "Back on route.",
     "Starting route to your destination.",
     "You have arrived at your destination.",
-    "Left lane for the turn.",
-    "Right lane for the turn.",
-    "Left lane for the exit.",
-    "Right lane for the exit.",
+    "Move to the left lane for the turn, check for cars.",
+    "Move to the right lane for the turn, check for cars.",
+    "Move to the left lane for the exit, check for cars.",
+    "Move to the right lane for the exit, check for cars.",
+    "Move to the left lane, check for cars.",
+    "Move to the right lane, check for cars.",
+    "Move left for the turn, check for cars.",
+    "Move right for the turn, check for cars.",
+    "Move left for the exit, check for cars.",
+    "Move right for the exit, check for cars.",
+    "Move left, check for cars.",
+    "Move right, check for cars.",
     "Turn left.",
     "Turn right.",
     "Keep left.",

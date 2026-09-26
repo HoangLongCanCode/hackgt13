@@ -75,6 +75,10 @@ enum class Maneuver(val eventType: DrivingEventType) {
 @Serializable
 enum class LaneSide { LEFT, RIGHT }
 
+/** Where [DrivingContext.speedLimit] comes from: a confirmed speed-limit sign read, or the map (OpenStreetMap via the laptop). */
+@Serializable
+enum class SpeedLimitSource { SIGN, MAP }
+
 /**
  * Plan §4 internal navigation representation, e.g.
  * `{"event": "TURN_RIGHT", "distanceMeters": 243, "street": "University Blvd", "requiredLane": "right"}`.
@@ -96,9 +100,15 @@ data class NavigationState(
     val offRoute: Boolean = false,
     /**
      * [requiredSide] was inferred from the maneuver direction (the route gave no lane): guidance only
-     * starts within `DrivingContextConfig.inferredLaneGuidanceStartMeters`.
+     * starts within `DrivingContextConfig.inferredLaneGuidanceStartMeters` (20 s of travel at speed, at most 800 m).
      */
     val laneHintInferred: Boolean = false,
+    /** Posted limit of the road the car is on, from the map (`navigation.packet.speedLimit.valueMph`); null = unknown. */
+    val mapSpeedLimitMph: Int? = null,
+    /** Road the map limit belongs to (`navigation.packet.speedLimit.roadName`); a change clears a sign-read limit. */
+    val mapSpeedLimitRoad: String? = null,
+    /** Identity of the target step ([NavTarget.eventId]); another id means the previous target was passed. Null = unknown. */
+    val eventId: String? = null,
 )
 
 @Serializable
@@ -150,7 +160,9 @@ data class DrivingContext(
     val pedestriansInPath: List<PedestrianInfo> = emptyList(),
     val laneGuidance: LaneGuidance? = null,
     val navigation: NavigationState? = null,
+    /** Posted speed limit in mph (display only), null = unknown. See [speedLimitSource]. */
     val speedLimit: Int? = null,
+    val speedLimitSource: SpeedLimitSource? = null,
     val activeSigns: List<String> = emptyList(),
     /** Currently active conditions, most urgent first (the top one is what AR should emphasise). */
     val activeAlerts: List<DrivingEvent> = emptyList(),

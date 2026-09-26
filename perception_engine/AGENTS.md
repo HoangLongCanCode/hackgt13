@@ -60,8 +60,9 @@ navigation engine). [`CLAUDE.md`](CLAUDE.md) in this folder only points here. Pa
 |---|---|---|
 | Laptop-tablet messages (perception and navigation) | `contracts/PROTOCOL_v2.md`, `contracts/schemas/<type>.schema.json` | `tests/test_protocol_v2.py` (schemas, samples, live server loopback); `perception-bridge` `ProtocolV2Test` (decode and round-trip every sample) and `ContractFieldCoverageTest` (every sample field modelled in Kotlin) |
 | Golden samples | `contracts/samples/v2/*.json`, `uplink_header.example.txt` | Both test suites above. Regenerate with `tests/make_golden_samples_v2.py` and `node nav/make_contract_samples.js` |
-| AR input (`WorldSnapshot` + `DrivingContext` + `navigation.packet` -> `ArScene`) | `../frontend/app/src/main/java/com/drivingassist/spatialcopilot/ar/`, `nav/RouteGuide.kt` | app `ArGeometryTest` (ground projection equals the server's `groundXZ` on real frames; Tab S9 FILL_CENTER), `ArSceneTest` |
-| Voice cues and the `/tts` proxy | `docs/audio/AUDIO_CUE_RULES.md`, `docs/audio/audio_cues.v1.json` | app `VoiceRulesTest` (reads the catalog JSON), `tests/test_tts_proxy.py` |
+| AR input (`WorldSnapshot` + `DrivingContext` + `navigation.packet` -> `ArScene`) | `../frontend/app/src/main/java/com/drivingassist/spatialcopilot/ar/`, `nav/RouteGuide.kt` | app `ArGeometryTest` (ground projection equals the server's `groundXZ` on real frames; Tab S9 FILL_CENTER), `ArSceneTest`, `LaneArrowsTest`, `RouteGuideTest` |
+| Voice cues and the `/tts` proxy | `docs/audio/AUDIO_CUE_RULES.md`, `docs/audio/audio_cues.v1.json` | app `VoiceRulesTest`, `VoiceLaneTest`, `VoiceNavPhrasesTest` (read the catalog JSON), `tests/test_tts_proxy.py` |
+| Map speed limits (`navigation.packet.speedLimit`) | `perception/realtime/speed_limit.py`, `contracts/PROTOCOL_v2.md` | `tests/test_speed_limit.py`; bridge `SpeedLimitLatch` in `DrivingContextEngineTest` |
 | phase1 session and packet | `../spatial/docs/PHASE_1_UPSTREAM_DATA_CONTRACT.md`, `../spatial/docs/PHASE_1_SPATIAL_NAVIGATION_SPEC.md` | `tests/test_nav_relay.py` |
 | v1 frame (legacy) | `contracts/perception_frame.v1.schema.json`, `contracts/samples/*.json` | `SampleDecodeTest` |
 
@@ -127,7 +128,9 @@ python scripts\extract_frames.py b1ff4656-0435391e --fps 15 --seconds 20 --out o
 
 Git Bash or Linux: `bash scripts/setup_env.sh --with-data`, then the same commands with forward slashes. Server
 options: `--port`, `--max-in-flight N` (default 2), `--lookahead auto|S`, `--sim-margin 0.10`, `--video-dir DIR`,
-`--set KEY=VALUE` (config override, for example `--set slow.max_hz=6`), `--no-tts`, `--tts-allow-lan`. `GET /health`
+`--set KEY=VALUE` (config override, for example `--set slow.max_hz=6`), `--no-tts`, `--tts-allow-lan`,
+`--speed-limits osm` (map speed limits from OpenStreetMap; sends the car position to the Overpass endpoint, off by
+default), `--speed-limit-endpoint URL`. `GET /health`
 and `GET /config` report the server state. The ElevenLabs key (`ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`) lives only
 in the gitignored `perception_engine/.env` or the environment: ElevenLabs' terms forbid keys in a mobile app, so the
 tablet calls `POST /tts` on this server (same port as the WebSocket). Env overrides for the big folders: `PERCEPTION_MODELS_DIR`, `PERCEPTION_DATA_DIR`,
@@ -142,6 +145,8 @@ python -m perception.realtime.server --mode sim  --nav-session nav/demo_sessions
 python -m perception.realtime.server --mode live --nav-route nav/demo_sessions/b1ff4656-0435391e/route.json
 python -m perception.realtime.server --mode auto --nav-live --nav-provider google   # the tablet searches (client.place_search -> navigation.places) and sends the destination (client.destination)
 python -m perception.realtime.server --mode auto --nav-live --nav-provider google --no-tts   # same, voice from Android TTS only (ElevenLabs off)
+python -m perception.realtime.server --mode auto --nav-live --nav-provider google --no-tts --speed-limits osm   # + posted limits from OpenStreetMap (navigation.packet.speedLimit)
+python tests/test_speed_limit.py                           # speed-limit lookup against a local fake Overpass
 node ../spatial/scripts/test-google-provider.js              # Google provider offline (fake responses)
 node ../spatial/scripts/check-google-key.js "Piedmont Park, Atlanta"   # one real Geocoding + Routes call with spatial/.env
 python -m perception.realtime.nav_relay --nav-session nav/demo_sessions/b1ff4656-0435391e --pts 0 5 10 20   # relay alone
@@ -263,11 +268,12 @@ adb push b1ff4656-0435391e.mov /sdcard/Android/data/com.drivingassist.spatialcop
 
 | I want to | Edit | Also |
 |---|---|---|
-| Draw something new on the road | `../frontend/.../ar/ArScene.kt` (scene in view pixels) and `ui/SpatialArEngine.kt` (drawing); keep clean vs Debug | `ArSceneTest` |
+| Draw something new on the road | `../frontend/.../ar/ArScene.kt` (scene in view pixels), `ar/LaneArrows.kt` (painted lane arrows) and `ui/SpatialArEngine.kt` (drawing); the clean view shows only lane arrows, the arrival pin and TOO CLOSE brackets, everything else goes in Debug | `ArSceneTest`, `LaneArrowsTest` |
+| Screen text (instruction, speed-limit sign, corner status) | `../frontend/.../nav/NavText.kt`, `ui/Hud.kt`, `ui/CopilotScreen.kt`, `session/StatusModel.kt` | `NavTextTest` |
 | Show more perception data | the Debug layer in `ArScene.kt`, `session/StatusModel.kt` | |
 | Reach the bridge from Compose | `viewModel.session.value.bridge` (null in DEMO) | `session/CopilotSession.kt` |
 | Add or tune a driving alert | `android/perception-bridge/.../context/DrivingContextEngine.kt`, `DrivingContextConfig.kt`, `DrivingTypes.kt` | `DrivingContextEngineTest` |
-| Spoken alerts | `../frontend/.../voice/CuePolicy.kt` (rules; numbers from `docs/audio/audio_cues.v1.json`), `VoiceArbiter.kt` | `VoiceRulesTest`; spec `docs/audio/AUDIO_CUE_RULES.md` |
+| Spoken alerts | `../frontend/.../voice/CuePolicy.kt` (rules; numbers from `docs/audio/audio_cues.v1.json`), `VoiceArbiter.kt` | `VoiceRulesTest`, `VoiceLaneTest`, `VoiceNavPhrasesTest`; spec `docs/audio/AUDIO_CUE_RULES.md` |
 | Staleness, credits, sim buffer, reconnect | `android/perception-bridge/.../bridge/BridgeConfig.kt` | `PerceptionBridgeTest`, `FlowControlTest` |
 | App source / URL / defaults | `../frontend/.../session/AppSettings.kt` | |
 | Swap a model or change the schedule | `perception/config_realtime.yaml`; backends in `perception/<block>/` | block `README.md` + `MODELS.md`, `download_models.py`, `docs/MODELS_AND_LICENSES.md` |
@@ -330,11 +336,13 @@ adb push b1ff4656-0435391e.mov /sdcard/Android/data/com.drivingassist.spatialcop
 13. Sim over Wi-Fi uses a fixed `--sim-margin` (0.10 s); tune it on the real hotspot.
 14. Licences: the realtime defaults are research/demo only (see `docs/MODELS_AND_LICENSES.md`).
 15. Voice implements the catalog's core only: vehicle too close, pedestrian, red light, road alerts paused / back,
-    nav start / prepare / immediate / arrive (street names are not spoken). Not yet: the voice pack files and
-    `/tts/prefetch` / `/tts/pack`, escalation repeats, voice modes, BT latency, speed-limit / stop-sign / lane cues
-    (off by default in the catalog anyway). TOO CLOSE re-arms only after NORMAL (a stricter rule than the spec's
-    escalation). ElevenLabs answered `402 paid_plan_required` for the configured library voice on 2026-09-26: use a
-    premade voice id or a paid plan; until then the app falls back to Android TTS.
+    nav start / continue ("Drive straight for ...") / prepare / immediate / arrive (street names are not spoken; exit
+    numbers are), and the lane-change cue ("Move to the right lane for the exit, check for cars.", or "Move right ..."
+    for a middle target lane; on by default, confident lanes only, at most 3 prompts per event key). Not yet: the voice
+    pack files and `/tts/prefetch` / `/tts/pack`, re-queue after a cut, escalation repeats, voice modes, BT latency,
+    speed-limit / stop-sign cues (off by default in the catalog anyway). TOO CLOSE re-arms only after NORMAL (a
+    stricter rule than the spec's escalation). ElevenLabs answered `402 paid_plan_required` for the configured library
+    voice on 2026-09-26: use a premade voice id or a paid plan; until then the app falls back to Android TTS.
 16. The WebSocket stays open while the app is in the background (the tablet stays the laptop's controller); voice and
     GPS stop with the activity.
 

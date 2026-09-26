@@ -5,16 +5,21 @@ import com.drivingassist.copilot.context.FollowingState
 import com.drivingassist.copilot.context.WorldSnapshot
 import com.drivingassist.spatialcopilot.nav.RouteGuide
 import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.exp
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 /** One chevron on the road, in view pixels: two wings and the tip. */
 data class Chevron(val left: Vec2, val tip: Vec2, val right: Vec2, val alpha: Float, val strokePx: Float)
 
-/** The lead vehicle, highlighted only while the Driving Context says CLOSE / CRITICAL and a distance exists. */
-data class LeadHighlight(val rect: ViewRect, val label: String, val critical: Boolean)
+/**
+ * The lead vehicle, highlighted only while the Driving Context says CRITICAL (debug: also CLOSE) and a
+ * distance exists. [badge]: draw [label] above it (debug; in the clean view the HUD shows the distance).
+ */
+data class LeadHighlight(val rect: ViewRect, val label: String, val critical: Boolean, val badge: Boolean = true)
 
 /** Debug-only overlays (every box, lane lines, the fitted ego lane, anchors, horizon). */
 data class DebugLayer(
@@ -24,10 +29,19 @@ data class DebugLayer(
     val egoLaneSource: EgoLane.Source?,
     val anchors: List<Vec2>,
     val horizonY: Float?,
+    /** Lane arrow state, e.g. "lanes 2/3 conf 0.82 targets 3 WRONG" / "lanes unknown: conf 0.21". */
+    val laneStatus: String? = null,
 )
 
-/** Everything the AR canvas draws for one display frame, already in view pixels. */
+/**
+ * Everything the AR canvas draws for one display frame, already in view pixels. Clean view: [laneArrows],
+ * [pin] and the TOO CLOSE [lead]. Chevrons, ribbon, the CLOSE highlight and [debug] are debug-only.
+ */
 data class ArScene(
+    /** Painted-style arrows lying flat in the lanes. */
+    val laneArrows: List<LaneArrow> = emptyList(),
+    /** View rects of road users over the lane arrows (inflated): clipped out of the arrow fills. */
+    val occluders: List<ViewRect> = emptyList(),
     val chevrons: List<Chevron> = emptyList(),
     /** Translucent strip under the chevrons (closed polygon), with its alpha. */
     val ribbon: List<Vec2> = emptyList(),
@@ -55,14 +69,19 @@ data class ArInput(
 
 /**
  * Builds [ArScene]s at display rate. Stateful only for presentation: it low-pass filters the ego lane
- * between perception updates, scrolls the chevrons, and fades arrows in and out (0.35 s) when they
- * become relevant or stop being relevant. Pure Kotlin (no Android types), so it is unit-tested on the JVM.
+ * between perception updates (snapping when the car crosses into the next lane), scrolls the chevrons,
+ * fades arrows in and out (0.35 s) when they become relevant or stop being relevant, and holds the lane
+ * arrows' state ([LaneArrowsBuilder]). Pure Kotlin (no Android types), so it is unit-tested on the JVM.
  */
 class ArSceneBuilder {
     private var lane: EgoLane? = null
+    /** Last ego lane measured from lines or anchors (unsmoothed), the reference for spotting a lane change. */
+    private var jumpRef: EgoLane? = null
+    private var jumpRefNs = 0L
     private var shown: Shown? = null
     private var lastNs: Long = 0L
     private var flow = 0.0
+    private val laneArrows = LaneArrowsBuilder()
 
     private class Shown(var intent: ArrowIntent, var alpha: Float, var target: Float)
 
@@ -74,17 +93,33 @@ class ArSceneBuilder {
         val image = world.image
         if (projector == null || image == null || viewWidth <= 0f || viewHeight <= 0f) {
             shown = null
+            jumpRef = null
+            laneArrows.reset()
             return ArScene(debug = null)
         }
         val map = FillCenter(image.width, image.height, viewWidth, viewHeight)
         val fresh = !world.perceptionStale
 
-        // Ego lane, smoothed (tau 180 ms) so the arrows glide between 10-17 Hz perception results.
+        // Ego lane, smoothed (tau 180 ms) so the arrows glide between 10-17 Hz perception results. A jump of
+        // most of a lane width is the car crossing into the next lane (the ego pair of lines changed): snap,
+        // since the painted lanes did not move. The jump is taken against the last lines / anchors measurement
+        // (both come from the server's ego pair) within 1 s, so a crossing seen through a camera-axis run or a
+        // lines <-> anchors switch still counts.
         val measured = if (fresh) EgoLane.from(world, projector) else null
+        var laneShift = 0
+        if (measured != null && measured.source != EgoLane.Source.CAMERA_AXIS) {
+            val ref = jumpRef?.takeIf { nowNs - jumpRefNs <= JUMP_REF_MAX_NS }
+            if (ref != null) {
+                val jump = (measured.x(JUMP_REF_Z) - ref.x(JUMP_REF_Z)) / measured.widthMeters
+                if (abs(jump) >= LANE_JUMP) laneShift = jump.roundToInt().coerceIn(-2, 2)
+            }
+            jumpRef = measured
+            jumpRefNs = nowNs
+        }
         val prev = lane
         lane = when {
             measured == null -> prev
-            prev == null || prev.source != measured.source -> measured
+            prev == null || prev.source != measured.source || laneShift != 0 -> measured
             else -> prev.lerp(measured, 1.0 - exp(-dt / LANE_TAU_S))
         }
         val ego = lane ?: EgoLane.AXIS
@@ -102,19 +137,30 @@ class ArSceneBuilder {
         if (shown?.let { it.alpha <= 0f && it.target == 0f } == true) shown = null
 
         flow = (flow + dt * FLOW_MPS) % CHEVRON_SPACING_M
-        val arrows = shown?.let { sh -> arrows(sh.intent, sh.alpha, ego, projector, map) }
+        // The chevron path and its ribbon are debug-only; the clean view keeps only the destination pin.
+        val arrows = if (input.debug) shown?.let { sh -> arrows(sh.intent, sh.alpha, ego, projector, map) } else null
+        val lanes = laneArrows.build(input, ego, projector, map, nowNs, dt, laneShift)
         return ArScene(
+            laneArrows = lanes.arrows,
+            occluders = lanes.occluders,
             chevrons = arrows?.chevrons.orEmpty(),
             ribbon = arrows?.ribbon.orEmpty(),
             ribbonAlpha = arrows?.ribbonAlpha ?: 0f,
-            pin = arrows?.pin,
+            pin = shown?.let { pin(it.intent, ego, projector, map) },
             arrowKind = shown?.intent?.kind,
             lead = lead(input, map),
-            debug = if (input.debug) debugLayer(world, ego, projector, map) else null,
+            debug = if (input.debug) debugLayer(world, ego, projector, map).copy(laneStatus = lanes.status) else null,
         )
     }
 
-    private class Arrows(val chevrons: List<Chevron>, val ribbon: List<Vec2>, val ribbonAlpha: Float, val pin: Vec2?)
+    private class Arrows(val chevrons: List<Chevron>, val ribbon: List<Vec2>, val ribbonAlpha: Float)
+
+    /** Destination pin on the road for ARRIVE within the arrow range. */
+    private fun pin(intent: ArrowIntent, ego: EgoLane, projector: GroundProjector, map: FillCenter): Vec2? {
+        if (intent.kind != ArrowKind.ARRIVE) return null
+        val d = intent.maneuverAheadMeters?.takeIf { it <= RouteArrows.RUN_M + 8.0 } ?: return null
+        return projector.toImage(Ground(ego.x(d), d))?.let(map::point)
+    }
 
     private fun arrows(intent: ArrowIntent, alpha: Float, ego: EgoLane, projector: GroundProjector, map: FillCenter): Arrows? {
         val zStart = max(projector.nearestVisibleZ + 1.5, MIN_START_Z)
@@ -155,12 +201,7 @@ class ArSceneBuilder {
             projector.toImage(Ground(p.x + t.z * 0.6, p.z - t.x * 0.6))?.let { right += map.point(it) }
         }
         val ribbon = if (left.size >= 2 && right.size >= 2) left + right.asReversed() else emptyList()
-        val pin = if (intent.kind == ArrowKind.ARRIVE) {
-            intent.maneuverAheadMeters?.takeIf { it <= RouteArrows.RUN_M + 8.0 }?.let { d ->
-                projector.toImage(Ground(ego.x(d), d))?.let(map::point)
-            }
-        } else null
-        return Arrows(chevrons, ribbon, alpha * 0.22f, pin)
+        return Arrows(chevrons, ribbon, alpha * 0.22f)
     }
 
     /** Point and unit heading on the path at arc length [s]. */
@@ -180,11 +221,14 @@ class ArSceneBuilder {
         val following = input.context.following
         if (input.context.perceptionStale || input.world.perceptionStale) return null
         if (following.state == FollowingState.NORMAL) return null
+        // Clean view: only TOO CLOSE, as brackets without a badge (the HUD shows the distance).
+        val critical = following.state == FollowingState.CRITICAL
+        if (!critical && !input.debug) return null
         val distance = following.distanceMeters ?: return null // no distance, no highlight: never invent a number
         val id = following.leadTrackId ?: return null
         val obj = input.world.objects[id] ?: return null
         val rect = map.box(obj.bbox) ?: return null
-        return LeadHighlight(rect, "Vehicle ahead: ${fmt1(distance)} m", following.state == FollowingState.CRITICAL)
+        return LeadHighlight(rect, "Vehicle ahead: ${fmt1(distance)} m", critical, badge = input.debug)
     }
 
     private fun debugLayer(world: WorldSnapshot, ego: EgoLane, projector: GroundProjector, map: FillCenter): DebugLayer {
@@ -221,6 +265,15 @@ class ArSceneBuilder {
         const val FLOW_MPS = 3.0
         /** Dash cams see their own hood in the bottom rows: the arrows start on the road beyond it. */
         const val MIN_START_Z = 7.0
+
+        /** The ego lane centre is compared this far ahead to spot a lane change. */
+        const val JUMP_REF_Z = 10.0
+
+        /** A jump of this many lane widths between perception results is a change of lane, not noise. */
+        const val LANE_JUMP = 0.6
+
+        /** The lane-change reference is dropped after this long without a lines / anchors measurement. */
+        private const val JUMP_REF_MAX_NS = 1_000_000_000L
 
         fun fmt1(x: Double): String = String.format(Locale.US, "%.1f", x)
     }

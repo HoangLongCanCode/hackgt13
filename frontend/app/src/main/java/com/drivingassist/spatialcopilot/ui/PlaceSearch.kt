@@ -49,7 +49,10 @@ private val Mint = Color(0xFF7DFFC3)
 private val Ink = Color(0xCC101614)
 private val Amber = Color(0xFFFFC56B)
 
-/** Small "Where to?" button under the status chip (LIVE); shows the current destination under it. */
+/**
+ * Small "Where to?" button (LIVE): under the status chip in the debug view (with the current destination under it),
+ * by the corner button in the clean view while there is no route and no destination.
+ */
 @Composable
 fun WhereToButton(destination: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val shape = RoundedCornerShape(14.dp)

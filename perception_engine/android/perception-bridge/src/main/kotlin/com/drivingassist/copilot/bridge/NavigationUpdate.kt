@@ -1,6 +1,7 @@
 package com.drivingassist.copilot.bridge
 
 import com.drivingassist.copilot.perception.NavRouteState
+import com.drivingassist.copilot.perception.NavSpeedLimit
 import com.drivingassist.copilot.perception.NavigationPacketMessage
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
@@ -26,6 +27,8 @@ data class NavigationUpdate(
     /** Packets received so far (increments on every packet, so equal route states still re-emit). */
     val sequence: Long,
     val stale: Boolean = false,
+    /** The map's posted limit at the packet's position (`navigation.packet.speedLimit`), null = off or unknown. */
+    val speedLimit: NavSpeedLimit? = null,
 ) {
     /** Age of this update on the bridge clock. */
     fun ageMs(nowNs: Long): Double = (nowNs - receivedAtNs) / 1e6
@@ -39,6 +42,7 @@ data class NavigationUpdate(
             serverTimeMs = message.serverTimeMs,
             receivedAtNs = receivedAtNs,
             sequence = sequence,
+            speedLimit = message.speedLimit,
         )
     }
 }

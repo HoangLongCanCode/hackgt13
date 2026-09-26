@@ -1,10 +1,18 @@
 # Audio cue rules: deterministic driving logic to audio cues
 
-Status: specification (2026-09-26); its core is implemented in the tablet app (`APP/voice/`, `VoiceRulesTest`) and
-the laptop proxy (`perception_engine/perception/realtime/tts_proxy.py`, `tests/test_tts_proxy.py`); what is not built
-yet is listed in `perception_engine/AGENTS.md` (known gaps). It covers production plan sections 22 (Audio Engine),
-23 (ElevenLabs / VoiceProvider) and 24 (voice priority), inside the section 38 safety boundary. The optional LLM
-layer (plan section 25) is out of scope: no model decides what is said or when.
+Status: specification (2026-09-26); its core is implemented in the tablet app (`APP/voice/`, `VoiceRulesTest`,
+`VoiceLaneTest`, `VoiceNavPhrasesTest`) and the laptop proxy (`perception_engine/perception/realtime/tts_proxy.py`,
+`tests/test_tts_proxy.py`); what is not built yet is listed in `perception_engine/AGENTS.md` (known gaps). It covers
+production plan sections 22 (Audio Engine), 23 (ElevenLabs / VoiceProvider) and 24 (voice priority), inside the
+section 38 safety boundary. The optional LLM layer (plan section 25) is out of scope: no model decides what is said
+or when.
+
+**Built in the tablet app** (`APP/voice/CuePolicy.kt`): `safety.vehicle_too_close`, `safety.pedestrian_critical`,
+`alert.pedestrian`, `alert.red_light`, `info.road_alerts_paused` / `back`, `nav.start`, `nav.continue`,
+`nav.prepare`, `nav.immediate`, `nav.arrive_prepare`, `nav.arrived`, `lane.change_left` / `lane.change_right`. The
+catalog's off-by-default cues are not built. Differences from this spec in that build: `{distance}` is rendered when
+the cue is created, there is no `{onto}` / `{then}` slot, `{destination}` is always `your destination`, and only
+`nav.continue` waits for its event key to settle (500 ms).
 
 Companion files:
 - [`AUDIO_ENGINE_RESEARCH.md`](AUDIO_ENGINE_RESEARCH.md): ElevenLabs, Android playback and in-vehicle auditory
@@ -174,7 +182,7 @@ timer; the bridge's tick is private) and passes it to both pure parts:
 | `info.speed_limit` (off) | PERCEPTION, GENERAL_INFORMATION | `speakSpeedLimit`; N in {10, 15, …, 85} read ≥ 3 times with `confidence ≥ 0.9` on one sign key, no other value read on any sign in the last 10 s, and if `vMeasured` is known not `vMeasured - 0.447 N > 9 m/s` | the reads span ≥ 1,000 ms of `lastSeenPts` | value change | 1 per value / 10,000 ms between different values | none | `Speed limit {N}.` | 5,000 ms; a newer value replaces a queued one | `context.speedLimit == N` | none today |
 | `info.road_alerts_paused` | SYSTEM, GENERAL_INFORMATION | stale for ≥ 2,500 ms of the last 3,000 ms (a restore shorter than 500 ms counts as stale), or `link.state != CONNECTED` or `takenOver` for 3,000 ms; after ≥ 1 s of good perception since app start | (in the condition) | not stale for 2,000 ms | 1 / 60,000 ms; memory survives a `sessionId` change | none | `Road alerts paused.` | 5,000 ms | still stale | chip `STALE` |
 | `info.road_alerts_back` | SYSTEM, GENERAL_INFORMATION | 2,000 ms of continuous good perception after a spoken `info.road_alerts_paused` | 2,000 ms | - | 1 per paused episode | none | `Road alerts back.` | 5,000 ms | not stale | chip clears |
-| `lane.change_left` / `lane.change_right` (off) | PERCEPTION, UPCOMING_NAVIGATION | see 6.5 | 3,000 ms | - | 1 per event key | none | 6.5 | 3,000 ms | action unchanged, confidence holds | none today |
+| `lane.change_left` / `lane.change_right` | PERCEPTION, UPCOMING_NAVIGATION | see 6.5 | 1,500 ms stable | - | 1 per (event key, side); a dropped request re-arms | none | 6.5 | 3,000 ms | same side and event key, every condition but the stable time | lane arrows on the road (target lane blinks, current lane red) |
 
 **Pedestrian escalation** (the shared episode):
 1. If the critical condition starts within 500 ms of the episode start, `alert.pedestrian` is skipped (a queued one is removed).
@@ -216,7 +224,8 @@ by 2.1 s).
 | RED repeat 20 s | Sensitivity on the runs: 6 / 12 / 20 s gave 15.8 / 15.6 / 15.2 utterances per minute; 20 s had the most cues still true |
 | YELLOW never voiced | YELLOW precision 0.19 |
 | GREEN never voiced | AGENTS rule 7; unlit or side-facing heads read GREEN (25 of 164) |
-| Stop signs, "vehicle close", speed limits, lane changes off by default | Typed stop-sign precision 0.38; `FOLLOWING_CLOSE` flips 16 times per minute; speed-limit OCR values differ from run to run of the same clip (30, 45, 50 vs 50 only) with confidence 0.99, and a wrong low limit on a highway could prompt hard braking; lane state is exact on 42 % of labelled images. Drivers stop trusting alerts below about 70 % accuracy (FHWA). Turn each on only after it is validated on labelled clips |
+| Stop signs, "vehicle close", speed limits off by default | Typed stop-sign precision 0.38; `FOLLOWING_CLOSE` flips 16 times per minute; speed-limit OCR values differ from run to run of the same clip (30, 45, 50 vs 50 only) with confidence 0.99, and a wrong low limit on a highway could prompt hard braking. Drivers stop trusting alerts below about 70 % accuracy (FHWA). Turn each on only after it is validated on labelled clips |
+| Lane change on, with 1,500 ms stable, lanes confidence ≥ 0.6 and lines seen | The clean driving view shows lane arrows on the road instead of text, and the voice names the lane change once. The current lane is exact on about 79 % of labelled images (the lane count on 42 %), so the cue needs a stable request on confident lanes: lanes confidence is about 0.8 on the highway clip, 0.56 at night and 0.2-0.3 in the city, so 0.6 keeps it to highway-like scenes. An empty `laneBoundaries` list means nothing was seen on that run (the server keeps the old lane number), so it counts as a violation. `check for cars` asks the driver to look; the cue never says the lane is free |
 | No object distances in speech | Plan section 18; NHTSA guidance (no TTC or distance numbers in speech); sim distances may read 35-40 % low (assumed focal length) |
 | "Road alerts paused." is spoken although it is status | NHTSA 1996 advises against audio for status. Exception: on audio-only glasses silence would read as "no hazards". Once per 60 s; the paired "Road alerts back." closes it |
 
@@ -231,15 +240,15 @@ in the JSON. A unit test iterates `DrivingEventType.entries` and fails on a miss
 | `DrivingEventType` | Produced today by | Audio | Cue ids | Reason when silent |
 |---|---|---|---|---|
 | `KEEP_LANE` | lane guidance | display only | - | a confirmation adds talk time |
-| `CHANGE_LANE_LEFT`, `CHANGE_LANE_RIGHT` | lane guidance (side inferred from the turn) | off by default | `lane.change_*` | lane state exact on 42 % of labelled images; the side is inferred (6.5) |
+| `CHANGE_LANE_LEFT`, `CHANGE_LANE_RIGHT` | lane guidance (side inferred from the turn) | spoken | `lane.change_*` | - |
 | `TURN_LEFT`, `TURN_RIGHT` | navigation engine (mock, Google) | spoken | `nav.prepare`, `nav.immediate` | - |
 | `KEEP_LEFT`, `KEEP_RIGHT` | a hand-written `route.json` only | spoken | `nav.prepare`, `nav.immediate` | - |
 | `MERGE` | navigation engine (Google `merge`) | spoken | `nav.prepare`, `nav.immediate` | - |
 | `MERGE_LEFT`, `MERGE_RIGHT` | nothing today (the engine sends `turnDirection: "merge"`) | spoken | `nav.prepare`, `nav.immediate` | - |
 | `EXIT` | `EXIT_HIGHWAY` from a hand-written `route.json`; `bridge-cli --nav-stub` | spoken | `nav.prepare`, `nav.immediate` | - |
 | `ENTER_HIGHWAY` | nothing today | spoken | `nav.prepare`, `nav.immediate` | - |
-| `FOLLOW_ROAD` from `GO_STRAIGHT` / `START_ROUTE` | navigation engine | long segments only | `nav.continue` | a short straight needs no prompt |
-| `FOLLOW_ROAD` from an unknown engine type | `NavigationMapper.maneuverFor` fallback | display only, `drop(unknownManeuver)` | - | an unknown maneuver is never spoken as "continue" |
+| `FOLLOW_ROAD` from `GO_STRAIGHT` / `START_ROUTE` | navigation engine | display only; the target skips these legs, and a far target speaks `nav.continue` (`Drive straight for {distance}.`) | `nav.continue` (of the target) | a short straight needs no prompt |
+| `FOLLOW_ROAD` as the target (nothing but road ahead), or from an unknown engine type | `NavigationMapper.maneuverFor` fallback | display only, `drop(unknownManeuver)` | - | no maneuver to drive to; an unknown maneuver is never spoken as "drive straight" |
 | `STOP` | nothing today | display only | - | a bare "Stop." sounds like a braking command (plan section 38) |
 | `ARRIVE` | navigation engine | spoken | `nav.arrive_prepare`, `nav.arrived` | - |
 | `VEHICLE_TOO_CLOSE` | following CRITICAL | spoken when voiced (5.3) | `safety.vehicle_too_close` | - |
@@ -293,7 +302,7 @@ the rule in the same change, and section 14.1 asks the navigation engine owners 
 | Stage | Trigger (evaluated every step) | Priority | Template | TTL | Default |
 |---|---|---|---|---|---|
 | `nav.start` | first settled target of a new route key | UPCOMING_NAVIGATION | `Starting route to {destination}.` | 6,000 ms | on |
-| `nav.continue` | a new settled target with `d ≥ max(60 s x v, 1,609 m)` | UPCOMING_NAVIGATION | `Continue for {distance}.` | 6,000 ms | on |
+| `nav.continue` | a settled target (a spoken maneuver or ARRIVE; not FOLLOW_ROAD or STOP) with `d ≥ max(60 s x v, 1,609 m)` and `d - (P(v) + v x leadS) ≥ v x 30 s` (`continueMinGapSeconds`: at least 30 s of travel before the prepare window, so it never plays right before `nav.prepare` with the same distance, nor in the same step as `nav.prepare` / `nav.immediate`); once per event key | UPCOMING_NAVIGATION | `Drive straight for {distance}.` | 6,000 ms | on |
 | `nav.prepare` | `d ≤ P(v) + v x leadS`; not within `postManeuverHoldMs` (3,000 ms) after a pass; skipped for good (logged) when `d - I(v) < v x 4 s` | UPCOMING_NAVIGATION | `In {distance}, {maneuver}{onto}.` | 6,000 ms | on |
 | `nav.immediate` | `10 m ≤ d ≤ I(v)`; after a chained immediate, the next event's immediate also waits `postManeuverHoldMs` unless `d < 3 s x v` | IMMEDIATE_NAVIGATION | `{Maneuver}{onto}{then}.`; with distance in LIVE (below) | 3,000 ms; dropped once `d < 10 m` | on |
 | `nav.arrive_prepare` | target is ARRIVE; same trigger, hold and skip as `nav.prepare`, with `I` replaced by `arrivedMeters` | UPCOMING_NAVIGATION | `In {distance}, you will arrive at {destination}.` | 6,000 ms | on |
@@ -304,13 +313,13 @@ the rule in the same change, and section 14.1 asks the navigation engine owners 
 
 ### 6.5 Stage rules
 
-- **Once per event key:** `nav.prepare`, `nav.immediate`, `nav.arrive_prepare`, `nav.arrived` and the lane cue. At most 3 presentations per event key across them, re-queues included; the lane cue is dropped first.
+- **Once per event key:** `nav.continue`, `nav.prepare`, `nav.immediate`, `nav.arrive_prepare`, `nav.arrived` and the lane cue (once per side). At most 3 presentations per event key across them (`maxPresentationsPerEventKey`), re-queues included; the lane cue is dropped first. The build counts the stages and lane cues already made plus the stages still due (`nav.immediate` / `nav.arrived`, and `nav.prepare` while its window is ahead), so a far target that got `nav.continue` gets no lane cue, and a second side is not spoken after the first.
 - **A stage dropped before `Play` stays armed** while its trigger holds.
 - **Off route:** while the *debounced* off-route state holds, `nav.prepare`, `nav.immediate` and lane cues are suppressed (the engine does not reroute, so the next instruction may be wrong). An unspoken `nav.immediate` may still fire. After the debounced state clears, stages not yet spoken re-arm.
 - **Late binding:** `{distance}` is rendered when the cue is bound (7.3), not when it is created, so a prompt that waited behind another one speaks the right bucket.
 - **"Then" chaining:** at `nav.immediate`, `next` = the first entry after the target in `upcomingManeuvers` whose type is not `GO_STRAIGHT` or `START_ROUTE`. No chain when the target is not in the list. When `next.distanceMeters - target.distanceMeters ≤ max(12 s x v, 60 m)`, `{then}` = `, then {maneuver of next}` (no `{onto}`), or `, then arrive at {destination}`, and the next event's prepare is marked spoken.
-- **LIVE position uncertainty:** in LIVE, when `lastTripAccuracyMeters` is unknown or above 20 m, or `{onto}` is empty, `nav.immediate` renders `In {distance}, {maneuver}{onto}.` instead of the bare form (at least `one hundred feet`), and it does not fire when `d < lastTripAccuracyMeters`.
-- **Lane cues (`speakLaneChange`, off by default):** created when `context.laneGuidance.action` is `CHANGE_LANE_LEFT` / `RIGHT` for 3,000 ms, `world` lanes confidence ≥ 0.7 over that time and lanes age ≤ 1 s, not off route, `d > I(v)` (before the immediate prompt), and the lane side came from the route (`laneHintInferred == false`) unless `allowInferredLaneSide`. Text is informational: `Right lane for the turn.` / `Left lane for the turn.` (`… for the exit.` for EXIT). Priority UPCOMING_NAVIGATION; lane cues never cut anything (7.2) and are PERCEPTION cues for the gates.
+- **LIVE position uncertainty:** in LIVE, when `lastTripAccuracyMeters` is unknown or above 20 m, or `{onto}` is empty, `nav.immediate` renders `In {distance}, {maneuver}{onto}.` instead of the bare form (at least `one hundred feet`), and it does not fire when `d < lastTripAccuracyMeters`. That sentence waits for its own audio until its TTL; it never falls back to the banked bare form (10.3 rule 4 applies only when the position is certain).
+- **Lane cues (`speakLaneChange`, on by default):** created when `context.laneGuidance.action` is `CHANGE_LANE_LEFT` / `RIGHT` continuously for `stableMs` (1,500 ms) while `world.lanes` saw lines (`laneBoundaries` not empty), has confidence ≥ 0.6 and age ≤ 1 s the whole time; any violation, a side change or a new event key restarts the time. Also: every PERCEPTION gate, a route that is not stale or off route, `d` known and `d - I(v) ≥ v x (its duration + 1 s)` (room to finish before the immediate prompt is due, the margin `nav.prepare` has at bind; an inferred side starts at 300 m, or 20 s of travel at speed up to 800 m, so the 11-word text also fits at highway speed), and the side came from the route (`laneHintInferred == false`) unless `allowInferredLaneSide` (on by default: Google routes carry no lanes, so every side they give is inferred). Once per (event key, side); a request dropped before `Play` re-arms. At start it is re-validated: the same side and event key must still hold every condition but the stable time (the lane quality, confidence / age / lines seen, may have dipped for at most 500 ms), so it is dropped once the car is in the lane or the immediate prompt is close. `nav.immediate` of the same event key cuts a lane cue that is playing (7.2). Text, all fixed phrases: `Move to the right lane for the turn, check for cars.` (TURN_LEFT / TURN_RIGHT), `Move to the right lane for the exit, check for cars.` (an exit: EXIT, or KEEP_* with an exit number), else `Move to the right lane, check for cars.`; the same with `left`. These name the edge lane, so they are used only when the target lanes include it (the lane count for right, lane 1 for left) or the side was inferred; a middle target (a numeric `requiredLane`, such as lane 2 of 3) says the side only: `Move right for the turn, check for cars.`, `Move right for the exit, check for cars.`, `Move right, check for cars.` (and `left`). No lane number or count is spoken. `check for cars` tells the driver to look; the cue never says the lane is free or that a change can be made. Priority UPCOMING_NAVIGATION; lane cues never cut anything (7.2) and are PERCEPTION cues for the gates.
 - **Workload lockout:** GENERAL_INFORMATION and SOCIAL cues do not start from the start of a `nav.immediate` utterance until the earliest of: 5 s after that maneuver is passed, 20 s after the immediate prompt started, navigation stale, off route, or a new route key.
 - **Never spoken:** the engine's `GO_STRAIGHT` at 0 m (`Continue straight.`), its "arrived" text at any distance, and app `RouteState` strings.
 
@@ -319,14 +328,24 @@ the rule in the same change, and section 14.1 asks the navigation engine owners 
 | Maneuver | `{maneuver}` | `{onto}` |
 |---|---|---|
 | `TURN_LEFT` / `TURN_RIGHT` | `turn left` / `turn right` | ` onto {street}` |
-| `KEEP_LEFT` / `KEEP_RIGHT` | `keep left` / `keep right` | ` onto {street}` |
+| `KEEP_LEFT` / `KEEP_RIGHT` | `keep left` / `keep right`; with an exit number (a Google ramp) the `EXIT` phrase | ` onto {street}` |
 | `MERGE` | `merge` | ` onto {street}` |
 | `MERGE_LEFT` / `MERGE_RIGHT` | `merge left` / `merge right` | none |
-| `EXIT` | `take exit {number}` when the label is `Exit {number}`, else `take the exit` | none |
+| `EXIT` | `take exit {exitNumberWords}`, else `take the exit` | none |
 | `ENTER_HIGHWAY` | `take the ramp` | ` onto {street}` |
 | `STOP` | display only | - |
-| `FOLLOW_ROAD` | only through `nav.continue` | - |
-| `ARRIVE` | only through `nav.arrive_prepare` / `nav.arrived` | - |
+| `FOLLOW_ROAD` | display only (a far target of another type speaks `nav.continue`) | - |
+| `ARRIVE` | only through `nav.continue`, `nav.arrive_prepare` / `nav.arrived` | - |
+
+**Exit numbers.** An exit is `EXIT`, or `KEEP_LEFT` / `KEEP_RIGHT` with an exit number (Google sends ramps as keep
+maneuvers with `exit 94` in the instruction, and never sends `EXIT`). `{exitNumberWords}`: the exit number, trimmed,
+must match `^(\d{1,3})([A-Za-z])?$`; 1-99 are words (`94` is `ninety-four`), 100-999 are spoken in groups (`250` is
+`two fifty`, `105` is `one oh five`, `300` is `three hundred`), and the letter follows as a capital (`23B` is
+`twenty-three B`). Anything else (`0`, `1000`, `12-14`) uses `take the exit`. So an exit is spoken
+`In half a mile, take exit ninety-four.`, then `Take exit ninety-four.` A sentence with the number that breaks its word
+budget (8.2) uses `take the exit` instead (LIVE: `In five hundred feet, take exit one oh five B.` is 10 words, over 9).
+The immediate prompt with a number is not in the voice pack; when its audio is not ready by the 400 ms deadline, the
+banked `Take the exit.` plays (10.3 rule 4).
 
 `{Maneuver}` is the phrase with a capital first letter. `{street}` is the normalized label (8.3), omitted when it is
 missing or longer than 4 words. For the Google provider (`packet.source.provider == "google"`), `roadName` holds the
@@ -393,8 +412,8 @@ the highway clip it also repeats TURN RIGHT at 300 m and ARRIVE at 300 m.
 | City intersection | session `b1ff4656-0435391e` | the 6.8 rows, plus `Red light ahead.` when a RED 15-60 m ahead holds on one track for 500 ms | nothing |
 | Night driving | session `b23adb0d-8a7aaced` | the 6.8 rows, plus `Red light ahead.` under the same rule | nothing |
 | Following distance | any clip | `Vehicle too close.` only for a voiced CRITICAL (5.3); CLOSE is display only | the demo script must say the "contextual alert" is visual for CLOSE |
-| Lane change | session `b1f4491b-cf446195` (right lane inferred within 300 m) | silent by default; with `speakLaneChange` and `allowInferredLaneSide`: `Right lane for the turn.` after the prepare prompt | a route with `requiredLane`, and validated lane state |
-| Highway exit (`Exit 23B`) | none: no provider emits `exit` or sets `exitNumber` | `In half a mile, take exit twenty-three B.`, then `Take exit twenty-three B.` | a hand-written session on the highway clip with `maneuver: "exit"`, `exitNumber: "23B"`, `requiredLane: "right"`, or manual navigation (`bridge-cli --nav-stub`) |
+| Lane change | session `b1f4491b-cf446195` (right lane inferred within 300 m, 20 s of travel at speed) | once, 1.5 s after the lane hint starts, when the lanes are confident (≥ 0.6) and the car is not in the right lane: `Move to the right lane for the turn, check for cars.` (after the prepare prompt) | a route with `requiredLane`, and lane state validated on labelled clips |
+| Highway exit (`Exit 23B`) | Google ramps (KEEP_* with an exit number); for `EXIT`, a hand-written session or manual navigation | `In half a mile, take exit twenty-three B.`, then `Take exit twenty-three B.`; with a lane hint, `Move to the right lane for the exit, check for cars.` (not after `nav.continue`: at most 3 prompts per event key; with an inferred side only up to about 21 m/s) | for `EXIT`: a hand-written session on the highway clip with `maneuver: "exit"`, `exitNumber: "23B"`, `requiredLane: "right"`, or manual navigation (`bridge-cli --nav-stub`) |
 | Connected driving | none | none | SOCIAL is reserved (7.8) |
 
 ---
@@ -573,7 +592,7 @@ laptop proxy; Native TTS = Android `TextToSpeech`; an on-device neural "Local TT
 
 ### 10.2 Phrase sets
 
-- **Fixed (about 40 phrases):** `fixedPhrases` in the JSON: every fixed text of sections 5, 6 and 8, the 16 speed limits, the street-less immediate forms (`Turn right.`, `Keep left.`, `Take the exit.`, …) and `Starting route to your destination.`.
+- **Fixed (50 phrases, 1,193 characters):** `fixedPhrases` in the JSON: every fixed text of sections 5, 6 and 8, the 16 speed limits, the twelve lane-change sentences (`Move to the right lane for the exit, check for cars.`, `Move right for the exit, check for cars.`, …), the street-less immediate forms (`Turn right.`, `Keep left.`, `Take the exit.`, …) and `Starting route to your destination.`. `Drive straight for {distance}.` and prompts with an exit number are not fixed; they are fetched when the cue is created.
 - **Route prefetch:** when a new route key appears, the tablet renders, for the next 3 target maneuvers first and then the rest: `nav.start`; for each target, every `speakDistance` bucket from `P(v)` down to 100 ft in `nav.prepare`, `nav.immediate` with and without its "then" form and in its LIVE distance form, and the same buckets for `nav.arrive_prepare`; `nav.arrived`. It sends them in one `POST /tts/prefetch`.
 - **Demo sessions:** `bridge-cli phrases --nav-session <dir>` lists every phrase the scheduler can produce for a session with the same Kotlin renderer, and `make_voice_pack.py --phrases` adds them to the pack, so a rehearsed demo makes no runtime ElevenLabs call at all.
 
@@ -582,7 +601,7 @@ laptop proxy; Native TTS = Android `TextToSpeech`; an on-device neural "Local TT
 1. The voice pack is looked up synchronously.
 2. On a miss, the proxy request and the native pre-render lookup start in parallel.
 3. At the deadline, play the proxy clip if it is ready, else the native clip.
-4. IMMEDIATE_NAVIGATION with neither ready: play the banked street-less form of the same stage (it keeps the ElevenLabs voice).
+4. IMMEDIATE_NAVIGATION with neither ready: play the banked street-less form of the same stage (it keeps the ElevenLabs voice). Not for the LIVE position-uncertain distance form (6.5): that one keeps waiting for its own audio.
 5. CRITICAL and TRAFFIC cues play only from RAM. With no clip at all (no pack, native voice not ready), play the earcon alone and log `src=earcon`.
 6. A clip that arrives after its deadline is cached for next time but not played.
 
@@ -625,7 +644,7 @@ The proxy returns whole clips, so "ready" means generation plus transfer, which 
 
 - **Audio validation:** the proxy rejects an upstream body that starts with `ID3`, `RIFF` or an MPEG frame sync (`0xFF` then `0xE0`-`0xFF`), or has an odd length, with `502`. Unvalidated bytes never reach the tablet.
 - **Clients:** loopback only (`adb reverse` arrives as 127.0.0.1) unless the server is started with `--tts-allow-lan`, which Wi-Fi and hotspot demos need. uvicorn runs with `proxy_headers=False`, because its default trusts `X-Forwarded-For` from loopback.
-- **Spend guard:** 200 characters per request; runtime 1,000 characters per minute and 2 requests in flight; prefetch 6,000 characters per minute and 2 in flight; 30,000 characters per day shared. `make_voice_pack.py` calls ElevenLabs directly with its own `--max-chars`.
+- **Spend guard:** 200 characters per request; runtime 2,500 characters per minute (a cold-cache pack warm-up of 1,193 plus runtime sentences in the same minute) and 2 requests in flight; prefetch 6,000 characters per minute and 2 in flight; 30,000 characters per day shared. `make_voice_pack.py` calls ElevenLabs directly with its own `--max-chars`.
 - **429 from ElevenLabs:** read `detail.code` (fall back to `detail.status`, which ElevenLabs marks legacy). `concurrent_limit_exceeded` / `too_many_concurrent_requests`: hold the request until an in-flight one completes. `system_busy`: retry once after 250 ms. `rate_limit_exceeded`: exponential backoff from 500 ms. Never retry past the cue's deadline; always log `detail.request_id`.
 - **Tablet side:** base URL = `perception.url` with `ws` → `http` and `wss` → `https`, same host and port, or the `perception.ttsUrl` extra (validated like the server URL). Its own OkHttp client: connect 1,000 ms, call 2,500 ms (the bridge's client has no read timeout). `503` or `403`: proxy off for this bridge lifetime, chip `VOICE LOCAL`. `429`, `502`, `504` or an IO error: native audio for this cue, retry the proxy on the next cue.
 
@@ -656,17 +675,19 @@ prototype placeholder to tune on recorded clips, like `DrivingContextConfig`; no
 | VTC escalation: distance ratio, TTC, min gap | 0.6, 1.5 s, 2,000 ms | 5.3 |
 | Pedestrian: persistence, episode end, min repeat, escalation earcon-only window, skip window, re-validation window | 200, 2,000, 6,000, 4,000, 500, 1,000 | 5.2 |
 | Red light: persistence, min / max distance, min confidence, max lateral, episode end, min repeat, max deceleration, reaction | 500, 15 / 60 m, 0.6, 6 m, 3,000, 20,000, 4.9 m/s², 1.0 s | 5.2 |
-| `speakStopSigns`, `speakVehicleClose`, `speakSpeedLimit`, `speakLaneChange`, `allowInferredLaneSide` | false | 5.2, 6.5 |
+| `speakStopSigns`, `speakVehicleClose`, `speakSpeedLimit` | false | 5.2 |
+| `speakLaneChange` (the lane cues' `enabledByDefault`), `allowInferredLaneSide` | true | 5.2, 6.5 |
 | `speakOffRoute`, `speakBackOnRoute`, `speakNavPaused` | false | 6.4 |
 | Road alerts paused: window, stale share, short restore, min good perception, min repeat; back: good time | 3,000, 2,500, 500, 1,000, 60,000; 2,000 | 5.2 |
 | `defaultSpeedMps`, `maxExtrapolationS`, `leadS` | 11.2, 2.0, 1.0 | 6.3 |
 | `immediateSeconds`, `immediateMinMeters`, `immediateMaxMeters` | 7.0, 45, 200 | 6.3 |
 | `prepareMeters` by speed band | 300 / 805 / 1,609 (bands at 19.4 and 25 m/s) | 6.3 |
 | `skipPrepareIfImmediateWithinS`, `postManeuverHoldMs`, `arrivedMeters`, `minExecutableMeters` | 4.0, 3,000, 15, 10 | 6.4 |
-| `thenChainSeconds`, `thenChainMinMeters`, `continueMinSeconds`, `continueMinMeters` | 12, 60, 60, 1,609 | 6.4, 6.5 |
+| `thenChainSeconds`, `thenChainMinMeters`, `continueMinSeconds`, `continueMinMeters`, `continueMinGapSeconds` | 12, 60, 60, 1,609, 30 | 6.4, 6.5 |
+| `maxPresentationsPerEventKey` | 3 | 6.5 |
 | `navSettleMs`, `navSettlePackets`, `simLeftoverMaxSeconds` | 500, 2, 2.0 | 6.2 |
 | `offRouteDebounceMs`, `offRouteMinTravelMeters`, `offRouteMaxAccuracyMeters`, `immediateMaxAccuracyMeters` | 3,000, 60, 25, 20 | 6.4, 6.5 |
-| Lane cue: stable time, min confidence, max age | 3,000, 0.7, 1.0 s | 6.5 |
+| Lane cue: stable time, min confidence, max age, TTL | 1,500, 0.6, 1.0 s, 3,000 | 6.5 |
 | `workloadLockoutAfterManeuverMs`, `workloadLockoutMaxMs` | 5,000, 20,000 | 6.5 |
 | `minGapMs`, `trafficAfterBlockMs`, `trafficCutsImmediateIfRemainingMs`, `queueMax` | 700, 500, 1,000, 4 | 7.2, 7.3 |
 | TTLs | CRITICAL 1,000, TRAFFIC 1,500, IMMEDIATE 3,000, UPCOMING 6,000, GENERAL 5,000, SOCIAL 30,000 | 7 |
@@ -928,7 +949,7 @@ Keep the SIM ExoPlayer without audio focus handling, or every cue would pause th
 | Who owns navigation wording | The templates in section 6, adopted by the navigation engine later (14.1 row 3). Until then the audio layer renders them from structured fields (14.5) |
 | One model or two | Flash v2.5 for everything; switch the fixed pack to Multilingual v2 only if a blind test prefers it |
 | Voice | One voice for navigation and alerts, chosen by ear (13.4 row 12); urgency comes from the earcon, the wording and speed 1.1. The candidates are probably professional voice clones, which ElevenLabs ranks slowest; prefetching makes that matter little |
-| Cues off by default | Stop signs, "vehicle close", speed limits, lane changes, off-route and navigation-paused stay off until their precision on labelled clips reaches about 90 % or their visual counterpart exists |
+| Cues off by default | Stop signs, "vehicle close", speed limits, off-route and navigation-paused stay off until their precision on labelled clips reaches about 90 % or their visual counterpart exists. Lane changes are on (their counterpart, the lane arrows, exists), limited to confident lanes (5.4) |
 | Where audio plays | Tablet speaker for the demo; open-ear glasses or a single earbud only. Georgia restricts headphones that impair hearing while driving (O.C.G.A. section 40-6-250); not legal advice |
 
 ---

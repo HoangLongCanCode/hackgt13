@@ -8,7 +8,8 @@ import com.drivingassist.copilot.context.Priority
  * - Dedupe: a key already playing is dropped; a key already queued has its payload replaced (older time kept).
  * - Queue: at most [queueMax], by priority then age; on overflow the lowest is evicted, never a CRITICAL.
  * - Preemption: CRITICAL cuts any non-CRITICAL; TRAFFIC cuts UPCOMING / GENERAL / SOCIAL, and IMMEDIATE with
- *   more than 1 s left; IMMEDIATE cuts GENERAL / SOCIAL. Earcon-only never cuts speech (a CRITICAL one does).
+ *   more than 1 s left; IMMEDIATE cuts GENERAL / SOCIAL, and the UPCOMING prompt or lane cue of its own event key.
+ *   Earcon-only never cuts speech (a CRITICAL one does). A cut cue is not re-queued.
  * - Start: nothing playing, [minGapMs] since the last end (CRITICAL ignores it, TRAFFIC waits 500 ms),
  *   TTL not passed (a CRITICAL waiting behind another CRITICAL keeps its TTL from that one's end), audio ready.
  */
@@ -108,7 +109,8 @@ class VoiceArbiter(private val queueMax: Int = 4, private val minGapMs: Long = 7
             Priority.CRITICAL_SAFETY -> current.priority != Priority.CRITICAL_SAFETY
             Priority.TRAFFIC_ALERT -> current.priority in LOW ||
                 (current.priority == Priority.IMMEDIATE_NAVIGATION && playingEndsMs - now > 1_000)
-            Priority.IMMEDIATE_NAVIGATION -> current.priority == Priority.GENERAL_INFORMATION || current.priority == Priority.SOCIAL
+            Priority.IMMEDIATE_NAVIGATION -> current.priority == Priority.GENERAL_INFORMATION || current.priority == Priority.SOCIAL ||
+                (current.priority == Priority.UPCOMING_NAVIGATION && new.eventKey != null && current.eventKey == new.eventKey)
             else -> false
         }
     }

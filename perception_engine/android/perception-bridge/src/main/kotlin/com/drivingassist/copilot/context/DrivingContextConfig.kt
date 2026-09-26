@@ -58,6 +58,12 @@ data class DrivingContextConfig(
     val laneGuidanceStartMeters: Double = 2000.0,
     /** Lane side only inferred from the turn direction (the route gave no required lane): start this late instead. */
     val inferredLaneGuidanceStartMeters: Double = 300.0,
+    /**
+     * With a known ego speed the inferred start moves out to this many seconds of travel, capped at
+     * [inferredLaneGuidanceMaxMeters]: 300 m is 11 s at highway speed, too little to change lanes before the exit.
+     */
+    val inferredLaneGuidanceLeadSeconds: Double = 20.0,
+    val inferredLaneGuidanceMaxMeters: Double = 800.0,
     /** At or below this distance navigation becomes IMMEDIATE_NAVIGATION. */
     val immediateNavigationMeters: Double = 300.0,
     val minLaneConfidence: Double = 0.3,
@@ -67,6 +73,33 @@ data class DrivingContextConfig(
     /** Sign must be seen in this many frames before it is announced (filters one-frame false positives). */
     val signMinSeen: Int = 2,
     val signForgetSeconds: Double = 5.0,
+
+    /**
+     * Speed-limit sign confirmation ([SpeedLimitLatch]; prototype placeholders, display only). Values a US sign
+     * can show (mph); any other read is not accepted.
+     */
+    val speedLimitAllowedMph: Set<Int> = (10..85 step 5).toSet(),
+    val speedLimitMinConfidence: Double = 0.85,
+    /** Farther reads do not count (an unknown distance does). */
+    val speedLimitMaxDistanceMeters: Double = 60.0,
+    /** The same value must be read on one sign for this much media time... */
+    val speedLimitDwellSeconds: Double = 0.8,
+    /** ...in at least this many reads (the server repeats a sign between its runs, so the time span is the real test). */
+    val speedLimitMinSeen: Int = 3,
+    /** A confirmed sign value not read again for this long is dropped (the map value, if any, shows instead). */
+    val speedLimitSignHoldSeconds: Double = 600.0,
+    /**
+     * While perception is stale media time stops, so a held sign value is timed on the wall clock: it is dropped
+     * after this long stale (or sooner, when the rest of [speedLimitSignHoldSeconds] runs out first).
+     */
+    val speedLimitStaleHoldSeconds: Double = 30.0,
+    /**
+     * Map value / road changes up to this long after the last read of the held sign move the map anchor instead of
+     * dropping the sign: passing the sign itself (OSM splits the way there, GPS and lookup lag). Later changes drop it.
+     */
+    val speedLimitSignPassSeconds: Double = 8.0,
+    /** A turn / exit / keep / merge target at most this far ahead that is then replaced counts as passed: the sign value is dropped. */
+    val speedLimitManeuverPassedMeters: Double = 80.0,
 
     /** Units for navigation distances in text / speech (object distances are always metres, plan §18). */
     val navigationUnits: Units = Units.IMPERIAL,

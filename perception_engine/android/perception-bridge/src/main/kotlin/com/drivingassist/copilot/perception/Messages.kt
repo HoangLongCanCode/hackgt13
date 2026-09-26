@@ -289,11 +289,25 @@ data class NavigationPacketMessage(
     val routeState: NavRouteState? = null,
     /** Verbatim phase1 `SpatialNavigationPacket` (free-form JSON). */
     val packet: JsonObject? = null,
+    /** Posted speed limit of the road at the packet's position (laptop `--speed-limits osm`); null = off or unknown. */
+    val speedLimit: NavSpeedLimit? = null,
 ) : PerceptionMessage {
     companion object {
         const val TYPE = "navigation.packet"
     }
 }
+
+/** `navigation.packet.speedLimit`: the map's posted limit for the road the car is on (mph only). */
+@Serializable
+data class NavSpeedLimit(
+    val valueMph: Int,
+    /** "osm" (OpenStreetMap `maxspeed`, looked up by the laptop). */
+    val source: String = "osm",
+    val roadName: String? = null,
+    val wayId: Long? = null,
+    /** Laptop epoch ms of the lookup that produced it. */
+    val queriedAtMs: Long? = null,
+)
 
 /**
  * `navigation.packet.routeState`. [action] / [audio] / [ui] map 1:1 onto the AR app's
@@ -302,6 +316,9 @@ data class NavigationPacketMessage(
  *   MERGE, EXIT_HIGHWAY, ARRIVE, START_ROUTE.
  * - [audio] = `audioInstructions[0].content`, [ui] = `spatialInstructions[0].type`
  *   (TURN_ARROW, LANE_ARROW, EXIT_MARKER, DISTANCE_LABEL, WARNING).
+ *
+ * The Driving Context and the app guide towards `NavigationMapper.target` instead: the same maneuver, or the next
+ * real one when [action] is only GO_STRAIGHT / START_ROUTE.
  */
 @Serializable
 data class NavRouteState(

@@ -73,6 +73,22 @@ class ArGeometryTest {
     }
 
     @Test
+    fun `ego lane stays on the reported lane through a lane change`() {
+        // DEMO slides the lines one lane left between 12 and 15.5 s; the anchors follow the lane the model reports.
+        var t = DemoDrive.CHANGE_START_S
+        while (t <= DemoDrive.CHANGE_END_S) {
+            val world = DemoDrive.world(t, 1)
+            val p = GroundProjector.from(world)!!
+            val anchor = world.road!!.road.anchor("ego_lane_center_near")!!
+            val g = p.toGround(anchor.x, anchor.y)!!
+            val lane = EgoLane.from(world, p)
+            assertEquals("source at $t s", EgoLane.Source.LANE_LINES, lane.source)
+            assertEquals("centre at $t s", g.x, lane.x(g.z), 0.35)
+            t += 0.05
+        }
+    }
+
+    @Test
     fun `no camera intrinsics means nothing to anchor to`() {
         assertNull(GroundProjector.from(DemoDrive.world(0.0, 1).copy(camera = null)))
         assertNotNull(GroundProjector.from(DemoDrive.world(0.0, 1)))

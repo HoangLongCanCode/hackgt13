@@ -58,6 +58,9 @@ OUTPUT_FORMAT = "pcm_24000"                     # the whole contract (header, tr
 AUDIO_FORMAT_HEADER = "pcm_s16le;rate=24000;channels=1"
 SAMPLE_RATE = 24000
 MAX_TEXT_CHARS = 200
+# Upstream characters per rolling minute: a cold-cache warm-up of the tablet's fixed pack (audio_cues.v1.json
+# fixedPhrases, about 1,200 characters) plus the nav sentences that arrive in the same minute.
+MINUTE_CHARS = 2500
 SILENCE_ABS = 200                               # |sample| below this counts as silence
 MAX_LEAD_SILENCE = SAMPLE_RATE * 20 // 1000     # keep at most 20 ms (480 samples) of leading silence
 MAX_BODY_BYTES = 4096
@@ -199,7 +202,7 @@ class SpendGuard:
     calendar day. Only upstream calls count (cache hits never reach it). A call counts when it starts, whatever
     ElevenLabs answers (conservative)."""
 
-    def __init__(self, minute_chars: int = 1000, max_in_flight: int = 2, day_chars: int = 30000):
+    def __init__(self, minute_chars: int = MINUTE_CHARS, max_in_flight: int = 2, day_chars: int = 30000):
         self.minute_chars, self.max_in_flight, self.day_chars = minute_chars, max_in_flight, day_chars
         self.in_flight = 0
         self._window: deque[tuple[float, int]] = deque()
@@ -264,7 +267,7 @@ class TtsProxy:
     def __init__(self, api_key: str = "", voice_id: str = "", *, enabled: bool = True, allow_lan: bool = False,
                  cache_dir: Path = CACHE_DIR, catalog: Optional[TtsCatalog] = None,
                  transport: Optional[httpx.AsyncBaseTransport] = None, timeout_s: float = 2.5,
-                 minute_chars: int = 1000, max_in_flight: int = 2, day_chars: int = 30000,
+                 minute_chars: int = MINUTE_CHARS, max_in_flight: int = 2, day_chars: int = 30000,
                  warmup: bool = True, base_url: str = API_BASE):
         self._api_key = api_key or ""            # never logged, never returned
         self._voice_id = voice_id or ""          # never returned (only voiceIdSet)

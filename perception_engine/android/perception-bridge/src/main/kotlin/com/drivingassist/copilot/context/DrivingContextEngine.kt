@@ -8,12 +8,15 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlin.math.roundToInt
 
 /**
  * Deterministic Driving Context Engine (plan §15-§18, §24). No LLM: the same WorldSnapshot +
- * NavigationState sequence always yields the same context and events (time = media pts).
+ * NavigationState sequence always yields the same context and events (time = media pts; the one exception is
+ * a speed-limit sign value held while perception is stale, timed on [clockNs] because media time stops then).
  *
  * Navigation comes from the phase1 route engine (`navigation.packet` -> [NavigationMapper]); this
  * engine does not plan routes. It combines the route's next maneuver / distance / required lane with
@@ -29,7 +32,11 @@ import kotlin.math.roundToInt
  *
  * Information / alerts only: it never controls the vehicle (plan §38).
  */
-class DrivingContextEngine(val config: DrivingContextConfig = DrivingContextConfig()) {
+class DrivingContextEngine(
+    val config: DrivingContextConfig = DrivingContextConfig(),
+    /** Monotonic wall clock (ns); only times a sign value held while perception is stale (inject it in tests). */
+    private val clockNs: () -> Long = System::nanoTime,
+) {
 
     data class Result(val context: DrivingContext, val events: List<DrivingEvent>)
 
@@ -42,7 +49,7 @@ class DrivingContextEngine(val config: DrivingContextConfig = DrivingContextConf
     private val gate = EventGate()
     private var following = FollowingState.NORMAL
     private var lastLaneAction: LaneAction? = null
-    private var speedLimit: Int? = null
+    private val speedLimit = SpeedLimitLatch(config)
     private var lastSeq = Long.MIN_VALUE
     private var lastNav: NavigationState? = null
     private var lastRevision = Long.MIN_VALUE
@@ -54,11 +61,18 @@ class DrivingContextEngine(val config: DrivingContextConfig = DrivingContextConf
     /**
      * Re-evaluates whenever the world (new frame, wave-2 merge, staleness flip) or the navigation
      * state changes (latest wins). Navigation-only evaluation runs even before any perception arrives.
+     * While perception is stale and a sign value is held, it also re-evaluates when that value runs out
+     * (a link loss may bring no new input at all).
      */
     suspend fun run(world: StateFlow<WorldSnapshot>, navigation: StateFlow<NavigationState?>) {
-        combine(world, navigation) { w, n -> w to n }.collect { (w, n) ->
+        combine(world, navigation) { w, n -> w to n }.collectLatest { (w, n) ->
             val changed = w.revision != lastRevision || n != lastNav || w.perceptionStale != lastStale
             if ((w.timing != null || n != null || lastNav != null) && changed) evaluate(w, n)
+            while (true) { // cancelled by the next input
+                val deadline = speedLimit.staleDeadlineNs ?: break
+                delay(((deadline - clockNs()) / 1_000_000L).coerceAtLeast(0L) + 1L)
+                evaluate(w, n)
+            }
         }
     }
 
@@ -191,9 +205,8 @@ class DrivingContextEngine(val config: DrivingContextConfig = DrivingContextConf
             val cls = sign.signClass
             if (cls.equals("unknown", ignoreCase = true)) continue
             activeSigns += cls
-            val limit = sign.speedLimit
+            if (sign.speedLimit != null) continue // confirmed by [speedLimit] below
             val e = when {
-                limit != null -> { speedLimit = limit; event(DrivingEventType.SPEED_LIMIT, Priority.GENERAL_INFORMATION, "SPEED LIMIT $limit", "Speed limit $limit.", sign.distanceMeters) }
                 sign.isStop -> event(DrivingEventType.STOP_SIGN, Priority.TRAFFIC_ALERT, "STOP SIGN${sign.distanceMeters?.let { " | ${it.roundToInt()} m" } ?: ""}", "Stop sign ahead.", sign.distanceMeters)
                 else -> event(DrivingEventType.ROAD_SIGN, Priority.GENERAL_INFORMATION, signText(cls), null, sign.distanceMeters)
             }
@@ -201,6 +214,11 @@ class DrivingContextEngine(val config: DrivingContextConfig = DrivingContextConf
             if (gate.pass("sign:$cls", cls, now)) out += e
         }
         gate.forgetIfUnseenPrefix("sign:", now, config.signForgetSeconds)
+
+        // --- Speed limit (display only): confirmed sign, else map; kept for a while when perception is stale ---
+        speedLimit.update(now, if (stale) null else world.signs, navigation, clockNs())?.let { c ->
+            out += event(DrivingEventType.SPEED_LIMIT, Priority.GENERAL_INFORMATION, "SPEED LIMIT ${c.valueMph}", "Speed limit ${c.valueMph}.", c.distanceMeters)
+        }
 
         val ctx = DrivingContext(
             seq = seq,
@@ -210,7 +228,8 @@ class DrivingContextEngine(val config: DrivingContextConfig = DrivingContextConf
             pedestriansInPath = peds.map { PedestrianInfo(it.id, it.distanceMeters, it.ttcSeconds) },
             laneGuidance = guidance,
             navigation = navigation,
-            speedLimit = speedLimit,
+            speedLimit = speedLimit.valueMph,
+            speedLimitSource = speedLimit.source,
             activeSigns = activeSigns.distinct(),
             activeAlerts = alerts.sortedBy { it.priority.rank },
             perceptionStale = stale,
@@ -243,14 +262,20 @@ class DrivingContextEngine(val config: DrivingContextConfig = DrivingContextConf
         lastLightId = null
         following = FollowingState.NORMAL
         lastLaneAction = null
-        speedLimit = null
+        speedLimit.reset()
         lastSeq = Long.MIN_VALUE
         lastRevision = Long.MIN_VALUE
     }
 
+    /** Where inferred lane guidance starts: [DrivingContextConfig.inferredLaneGuidanceStartMeters], farther at speed. */
+    private fun inferredStart(egoSpeedMps: Double?): Double {
+        val bySpeed = (egoSpeedMps ?: 0.0).coerceAtLeast(0.0) * config.inferredLaneGuidanceLeadSeconds
+        return maxOf(config.inferredLaneGuidanceStartMeters, minOf(config.inferredLaneGuidanceMaxMeters, bySpeed))
+    }
+
     private fun laneGuidance(world: WorldSnapshot, nav: NavigationState, priority: Priority): LaneGuidance? {
         if (nav.offRoute) return null
-        val start = if (nav.laneHintInferred) config.inferredLaneGuidanceStartMeters else config.laneGuidanceStartMeters
+        val start = if (nav.laneHintInferred) inferredStart(nav.egoSpeedMps) else config.laneGuidanceStartMeters
         if (nav.distanceMeters > start) return null
         if (nav.requiredLanes.isEmpty() && nav.requiredSide == null) return null
         val lanes = world.lanes?.takeIf { it.ageSeconds <= config.maxLanesAgeSeconds && it.lanes.confidence >= config.minLaneConfidence }
@@ -306,7 +331,7 @@ class DrivingContextEngine(val config: DrivingContextConfig = DrivingContextConf
     private fun maneuverSpeech(nav: NavigationState): String {
         nav.audio?.takeIf { it.isNotBlank() }?.let { return it }
         val dist = speakNavDistance(nav.distanceMeters, config.navigationUnits)
-        val onto = nav.label?.let { " onto $it" } ?: ""
+        val onto = nav.label?.let { if (it.startsWith("Exit ")) " for $it" else " onto $it" } ?: ""
         return when (nav.maneuver) {
             Maneuver.EXIT -> "In $dist, take ${nav.label ?: "the exit"}."
             Maneuver.TURN_LEFT -> "Turn left in $dist$onto."

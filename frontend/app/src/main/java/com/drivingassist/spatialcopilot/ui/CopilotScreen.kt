@@ -20,6 +20,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -44,6 +45,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -61,19 +63,24 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.drivingassist.copilot.context.DrivingContext
+import com.drivingassist.copilot.context.DrivingEventType
 import com.drivingassist.copilot.context.FollowingState
 import com.drivingassist.copilot.context.Maneuver
+import com.drivingassist.copilot.context.Priority
 import com.drivingassist.copilot.context.WorldSnapshot
 import com.drivingassist.copilot.perception.LightState
 import com.drivingassist.spatialcopilot.CopilotViewModel
-import com.drivingassist.spatialcopilot.ar.ArSceneBuilder
 import com.drivingassist.spatialcopilot.camera.DrivingCamera
+import com.drivingassist.spatialcopilot.nav.Instruction
+import com.drivingassist.spatialcopilot.nav.NavText
 import com.drivingassist.spatialcopilot.nav.RouteGuide
 import com.drivingassist.spatialcopilot.session.AppSettings
 import com.drivingassist.spatialcopilot.session.CopilotSession
 import com.drivingassist.spatialcopilot.session.SourceMode
 import com.drivingassist.spatialcopilot.session.StatusUi
+import java.util.Locale
 import kotlin.math.roundToInt
+import kotlinx.coroutines.delay
 
 private val Mint = Color(0xFF7DFFC3)
 private val Ink = Color(0xCC101614)
@@ -128,41 +135,45 @@ fun CopilotScreen(viewModel: CopilotViewModel) {
                 SourceMode.DEMO -> DemoBackdrop()
             }
             SpatialArEngine(session = session, debug = settings.debug, modifier = Modifier.fillMaxSize())
-            // LIVE: "Where to?" under the status chip; the laptop searches places and routes to the one tapped.
+            // LIVE: "Where to?"; the laptop searches places and routes to the one tapped.
             val bridge = session.bridge?.takeIf { session.settings.mode == SourceMode.LIVE }
+            val problem by session.problem.collectAsStateWithLifecycle()
+            val searchPanel: (@Composable () -> Unit)? = if (bridge != null && showSearch) {
+                {
+                    val state by session.placeSearch.collectAsStateWithLifecycle()
+                    val hello by bridge.serverHello.collectAsStateWithLifecycle()
+                    PlaceSearchPanel(
+                        state = state,
+                        liveNavigation = hello?.let { it.navigationMode == "live" },
+                        onSearch = viewModel::search,
+                        onPick = { viewModel.goTo(it); showSearch = false },
+                        onClose = { showSearch = false },
+                    )
+                }
+            } else {
+                null
+            }
             Chrome(
                 session = session,
                 settings = settings,
                 status = status,
                 context = context,
                 route = route,
+                problem = problem,
                 cameraMissing = session.settings.mode == SourceMode.LIVE && !cameraGranted,
                 onAskCamera = { launcher.launch(arrayOf(Manifest.permission.CAMERA)) },
                 onChipClick = { if (status.line1.contains("TAKEN OVER")) viewModel.reclaim() else showSettings = true },
                 onChipLongClick = viewModel::toggleDebug,
-            ) {
-                if (bridge != null) {
-                    if (showSearch) {
-                        val state by session.placeSearch.collectAsStateWithLifecycle()
-                        val hello by bridge.serverHello.collectAsStateWithLifecycle()
-                        PlaceSearchPanel(
-                            state = state,
-                            liveNavigation = hello?.let { it.navigationMode == "live" },
-                            onSearch = viewModel::search,
-                            onPick = { viewModel.goTo(it); showSearch = false },
-                            onClose = { showSearch = false },
-                        )
-                    } else {
-                        WhereToButton(settings.destination, onClick = { showSearch = true })
-                    }
-                }
-            }
+                onWhereTo = bridge?.let { { showSearch = true } },
+                searchPanel = searchPanel,
+            )
             if (showSettings) {
                 SettingsDialog(
                     initial = settings,
                     onDismiss = { showSettings = false },
                     onApply = { viewModel.apply(it); showSettings = false },
                     onSimToggle = session.sim?.let { sim -> { sim.togglePlay() } },
+                    onWhereTo = bridge?.let { { showSettings = false; showSearch = true } },
                 )
             }
         }
@@ -179,7 +190,11 @@ private fun DemoBackdrop() {
     )
 }
 
-@OptIn(ExperimentalFoundationApi::class)
+/**
+ * Clean view (default): speed-limit sign top left, instruction banner top centre, the critical pill bottom centre and
+ * one corner button bottom left, nothing else over the road. Debug view: all of that plus the status chip, debug
+ * numbers, maneuver card, route map, degraded-state banner and every alert.
+ */
 @Composable
 private fun Chrome(
     session: CopilotSession,
@@ -187,29 +202,61 @@ private fun Chrome(
     status: StatusUi,
     context: DrivingContext,
     route: RouteGuide?,
+    problem: String?,
     cameraMissing: Boolean,
     onAskCamera: () -> Unit,
     onChipClick: () -> Unit,
     onChipLongClick: () -> Unit,
-    /** Under the status chip: LIVE's "Where to?" button or search panel (empty in the other modes). */
-    search: @Composable () -> Unit,
+    /** LIVE only: opens the "Where to?" search (null in the other modes). */
+    onWhereTo: (() -> Unit)?,
+    /** LIVE: the open search panel; null = closed. */
+    searchPanel: (@Composable () -> Unit)?,
 ) {
     Box(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(16.dp)) {
-        Column(Modifier.align(Alignment.TopStart), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            StatusChip(
-                status = status,
-                debug = settings.debug,
-                modifier = Modifier.combinedClickable(onClick = onChipClick, onLongClick = onChipLongClick),
-            )
-            search()
-            if (settings.debug) DebugPanel(status.debugLines)
+        // The clock a few times a second: the banner dims once packets stop, even when nothing else redraws.
+        val hasRoute = route != null
+        val nowNs by produceState(session.clockNs(), session, hasRoute) {
+            while (hasRoute) {
+                value = session.clockNs()
+                delay(250)
+            }
         }
-        route?.let { ManeuverCard(it, session.routeDistanceNow(it), Modifier.align(Alignment.TopEnd)) }
-        route?.takeIf { !it.stale && !it.polyline.isNullOrEmpty() && it.carLocation != null }?.let {
-            RouteMapCard(it, Modifier.align(Alignment.BottomEnd))
+        val instruction = route?.let { NavText.instruction(it, session.routeDistanceNow(it), nowNs, session.sim?.positionSeconds) }
+        if (settings.debug) {
+            DebugChrome(session, settings, status, context, route, instruction, onChipClick, onChipLongClick, onWhereTo, searchPanel)
+        } else {
+            Column(Modifier.align(Alignment.TopStart), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                context.speedLimit?.let { SpeedLimitSign(it) }
+                searchPanel?.invoke()
+            }
+            // The open "Where to?" panel (top left, 440 dp) reaches under the centred banner: no banner over its Close button.
+            instruction?.takeIf { searchPanel == null }?.let { InstructionBanner(it, Modifier.align(Alignment.TopCenter)) }
+            criticalAlertText(context)?.let { AlertPill(it, critical = true, modifier = Modifier.align(Alignment.BottomCenter)) }
+            Row(
+                Modifier.align(Alignment.BottomStart),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                HudCornerButton(status.level, onClick = onChipClick, onLongClick = onChipLongClick)
+                // Tapping the note does what the button does ("Taken over · tap to take back" reclaims).
+                status.short?.takeIf { status.level != StatusUi.Level.OK }?.let {
+                    HudStatusNote(it, status.level, onClick = onChipClick, onLongClick = onChipLongClick)
+                }
+                if (onWhereTo != null && searchPanel == null && route == null && settings.destination.isBlank()) {
+                    WhereToButton(destination = "", onClick = onWhereTo)
+                }
+            }
+            // Setup only: the SIM clip is not on the tablet (the debug view has it in the status chip).
+            problem?.takeIf { session.sim != null && it.startsWith("No clip") }?.let {
+                Text(
+                    text = it,
+                    color = Color.White,
+                    fontSize = 14.sp,
+                    modifier = Modifier.align(Alignment.Center).widthIn(max = 560.dp).background(Ink, RoundedCornerShape(12.dp))
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                )
+            }
         }
-        status.banner?.let { Banner(it, Modifier.align(Alignment.TopCenter).padding(top = 4.dp)) }
-        alertText(context, session.bridge?.world?.value)?.let { (text, critical) -> AlertPill(text, critical, Modifier.align(Alignment.BottomCenter)) }
         if (cameraMissing) {
             Column(Modifier.align(Alignment.Center).padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(text = "Allow the camera, then point it at the road or the driving video.", color = Color.White)
@@ -219,20 +266,75 @@ private fun Chrome(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun BoxScope.DebugChrome(
+    session: CopilotSession,
+    settings: AppSettings,
+    status: StatusUi,
+    context: DrivingContext,
+    route: RouteGuide?,
+    instruction: Instruction?,
+    onChipClick: () -> Unit,
+    onChipLongClick: () -> Unit,
+    onWhereTo: (() -> Unit)?,
+    searchPanel: (@Composable () -> Unit)?,
+) {
+    Column(Modifier.align(Alignment.TopStart), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        context.speedLimit?.let { SpeedLimitSign(it) }
+        StatusChip(
+            status = status,
+            debug = true,
+            modifier = Modifier.combinedClickable(onClick = onChipClick, onLongClick = onChipLongClick),
+        )
+        if (searchPanel != null) searchPanel() else if (onWhereTo != null) WhereToButton(settings.destination, onClick = onWhereTo)
+        DebugPanel(status.debugLines)
+    }
+    route?.let { ManeuverCard(it, session.routeDistanceNow(it), Modifier.align(Alignment.TopEnd)) }
+    route?.takeIf { !it.stale && !it.polyline.isNullOrEmpty() && it.carLocation != null }?.let {
+        RouteMapCard(it, Modifier.align(Alignment.BottomEnd))
+    }
+    Column(
+        Modifier.align(Alignment.TopCenter),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        instruction?.takeIf { searchPanel == null }?.let { InstructionBanner(it) }
+        status.banner?.let { Banner(it, Modifier.padding(top = 4.dp)) }
+    }
+    alertText(context, session.bridge?.world?.value)?.let { (text, critical) -> AlertPill(text, critical, Modifier.align(Alignment.BottomCenter)) }
+}
+
 /**
- * The contextual alert under the road, measurable wording only: the lead vehicle in CLOSE / TOO CLOSE with
- * its measured distance, a red light or a pedestrian in the path. Nothing without a distance for the lead
+ * Clean view: the critical alert only, measurable wording: TOO CLOSE with the lead's measured distance, or a
+ * pedestrian in the path at the engine's CRITICAL priority (within 12 m or TTC 3 s). Nothing while perception is stale.
+ */
+private fun criticalAlertText(ctx: DrivingContext): String? {
+    if (ctx.perceptionStale) return null
+    val f = ctx.following
+    val d = f.distanceMeters
+    if (d != null && f.state == FollowingState.CRITICAL) return "TOO CLOSE · Vehicle ahead: ${fmt1(d)} m"
+    val ped = ctx.activeAlerts.firstOrNull { it.type == DrivingEventType.PEDESTRIAN_IN_PATH && it.priority == Priority.CRITICAL_SAFETY }
+        ?: return null
+    return ped.distanceMeters?.let { "Pedestrian ahead: ${it.roundToInt()} m" } ?: "Pedestrian ahead"
+}
+
+private fun fmt1(x: Double): String = String.format(Locale.US, "%.1f", x)
+
+/**
+ * Debug view: the contextual alert under the road, measurable wording only: the lead vehicle in CLOSE / TOO CLOSE
+ * with its measured distance, a red light or a pedestrian in the path. Nothing without a distance for the lead
  * (never invent a number); green and unknown lights are never shown as alerts.
  */
 private fun alertText(ctx: DrivingContext, world: WorldSnapshot?): Pair<String, Boolean>? {
     if (ctx.perceptionStale) return null
     val f = ctx.following
     val d = f.distanceMeters
-    if (d != null && f.state == FollowingState.CRITICAL) return "TOO CLOSE · Vehicle ahead: ${ArSceneBuilder.fmt1(d)} m" to true
+    if (d != null && f.state == FollowingState.CRITICAL) return "TOO CLOSE · Vehicle ahead: ${fmt1(d)} m" to true
     ctx.pedestriansInPath.firstOrNull()?.let { p ->
-        return (p.distanceMeters?.let { "Pedestrian ahead: ${ArSceneBuilder.fmt1(it)} m" } ?: "Pedestrian ahead") to true
+        return (p.distanceMeters?.let { "Pedestrian ahead: ${fmt1(it)} m" } ?: "Pedestrian ahead") to true
     }
-    if (d != null && f.state == FollowingState.CLOSE) return "Vehicle ahead: ${ArSceneBuilder.fmt1(d)} m" to false
+    if (d != null && f.state == FollowingState.CLOSE) return "Vehicle ahead: ${fmt1(d)} m" to false
     // Lights: the same plausibility checks the voice uses (audio_cues.v1.json alert.red_light), so a misread
     // signal at the stop line or off to the side is not shown as an alert.
     ctx.trafficLight?.takeIf { it.state == LightState.RED || it.state == LightState.YELLOW }?.takeIf { l ->
@@ -416,6 +518,8 @@ private fun SettingsDialog(
     onDismiss: () -> Unit,
     onApply: (AppSettings) -> Unit,
     onSimToggle: (() -> Unit)?,
+    /** LIVE session: close the dialog and open the place search (null otherwise). */
+    onWhereTo: (() -> Unit)?,
 ) {
     var draft by remember(initial) { mutableStateOf(initial) }
     var url by remember(initial) { mutableStateOf(initial.serverUrl) }
@@ -452,6 +556,7 @@ private fun SettingsDialog(
                         placeholder = { Text("e.g. Piedmont Park, Atlanta") },
                     )
                     Text("The laptop routes there from this tablet's GPS (Google Maps with a key in spatial/.env, else the mock route). Or tap Where to? to search.", fontSize = 12.sp)
+                    onWhereTo?.let { TextButton(onClick = it) { Text("Where to?") } }
                 }
                 if (draft.mode == SourceMode.SIM) {
                     OutlinedTextField(value = video, onValueChange = { video = it }, singleLine = true, modifier = Modifier.fillMaxWidth(), label = { Text("Sim clip id") })

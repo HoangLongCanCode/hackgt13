@@ -43,6 +43,18 @@ The parts built separately now run as one product on the Galaxy Tab S9.
 - Tests: `:perception-bridge` 117, `:app` 18 (new), `tests/test_tts_proxy.py` 9/9 (new), protocol 11/11 (offline 7/7),
   ego path 3/3, nav relay 21/21. Run on the Tab S9 (Android 16): SIM, LIVE (with GPS -> phase1) and DEMO.
 
+- **Clean driving view (later the same day).** The clean view shows only painted-style lane arrows on the road
+  (one per lane from the lane model; target lane green, wrong lane red with the target blinking), the next-maneuver
+  instruction on top in feet / miles ("Drive straight", "Turn left in 900 ft", "Exit 94 in 0.6 mi"), a US speed-limit
+  sign top left, the TOO CLOSE brackets and pill, and a small corner button; the status chip, maneuver card, route
+  map, vehicle-close / light pills and chevrons are debug-only. RouteGuide and NavigationMapper skip phase1's
+  GO_STRAIGHT steps to the next real maneuver. The bridge's speed limit is a strict sign latch (10-85 mph, confidence
+  0.85, 0.8 s, cleared after a turn or a map-road change) with the map as fallback; the laptop can supply the map
+  value from OpenStreetMap (`--speed-limits osm`, off by default, `navigation.packet.speedLimit`). Voice: the
+  lane-change cue is on ("Move to the right lane for the exit, check for cars."), "Drive straight for two miles.",
+  exit numbers as words. DEMO shows it all in one 40 s loop. Checked on the Tab S9 in DEMO and SIM (highway clip:
+  lane 2 of 3 red, lane 3 green with the turn shape; speed limit from OpenStreetMap).
+
 ## Branch `long` (perception engine), 2026-09-25/26
 
 What branch `long` of the AI Spatial Driving Copilot (HackGT 13 project by Long Huynh, Luong Nguyen and Gia Minh Do)

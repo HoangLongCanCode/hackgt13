@@ -11,6 +11,7 @@ messages: contracts/PROTOCOL_v2.md and contracts/schemas/. Run from perception_e
               [--max-in-flight 2] [--lookahead auto|SECONDS] [--start-on-connect]
   navigation: --nav-session DIR (phase1 session: sim/video) | --nav-route route.json | --nav-destination "QUERY"
               [--nav-origin "QUERY"] [--nav-provider mock|google] (live) [--phase1-dir DIR] [--node node]
+              [--speed-limits off|osm] [--speed-limit-endpoint URL]   navigation.packet.speedLimit (speed_limit.py)
   tts:        [--no-tts] [--tts-allow-lan]   ElevenLabs proxy POST /tts, GET /tts/health (tts_proxy.py)
 
 Tablet over USB: `adb reverse tcp:8765 tcp:8765`, then the app uses ws://127.0.0.1:8765/perception.
@@ -25,7 +26,8 @@ Threads (every model is owned by exactly one lane thread; nothing on the asyncio
                with perception.skip).
   * nav worker (optional): the phase1 route-engine relay (perception.realtime.nav_relay.NavRelay, a Node child
                process) is only ever called from this thread -> navigation.packet (broadcast) and navigation.places
-               (to the client whose client.place_search it answers).
+               (to the client whose client.place_search it answers). With --speed-limits osm it also attaches
+               speedLimit to each packet (a non-blocking OpenStreetMap lookup; the HTTP request runs in its own thread).
 Lane threads hand serialised JSON to the loop with loop.call_soon_threadsafe. Each client has a reliable control
 queue (hello, skip, error, pong, stats) plus 1-slot latest-wins slots for perception.frame, perception.update and
 navigation.packet, so a slow socket only loses its own messages and never stalls inference. A wave-1 frame that
@@ -597,6 +599,16 @@ def make_places(request_id: str, query: str, provider: str, places: list[dict[st
             "query": query, "provider": provider, "places": places, "error": error}
 
 
+def make_speed_limits(a: argparse.Namespace) -> Optional[Any]:
+    """--speed-limits osm -> an OsmSpeedLimits (sends the car position to the Overpass endpoint); else None."""
+    if getattr(a, "speed_limits", "off") != "osm":
+        return None
+    from perception.realtime.speed_limit import DEFAULT_ENDPOINT, OsmSpeedLimits
+    endpoint = getattr(a, "speed_limit_endpoint", None) or DEFAULT_ENDPOINT
+    print(f"[nav] speed limits: OpenStreetMap Overpass ({endpoint}); the car position is sent there", flush=True)
+    return OsmSpeedLimits(endpoint)
+
+
 def load_nav_relay_class(spec: Optional[str]) -> tuple[Optional[type], Optional[str]]:
     """NavRelay from perception.realtime.nav_relay (written by the navigation side), or `module:Class` (tests)."""
     try:
@@ -619,7 +631,10 @@ class NavWorker(threading.Thread):
     by itself). NAV_FAIL_THRESHOLD calls in a row without a packet set available=False with the reason, re-announce
     perception.hello (navigation.available false) and send one perception.error internal; the next packet clears
     it and re-announces the hello. `running` stays true while the relay was started, so trip states keep flowing
-    (and can recover it)."""
+    (and can recover it).
+
+    Speed limits (--speed-limits osm): every published packet gets a top-level `speedLimit` (the OpenStreetMap value
+    for packet.progress.currentLocation, or null when unknown); with the flag off the field is absent."""
 
     def __init__(self, srv: "Server", relay_cls: type, a: argparse.Namespace):
         super().__init__(name="nav-worker", daemon=True)
@@ -639,6 +654,7 @@ class NavWorker(threading.Thread):
         # live: (query, picked place or None), set by client.destination, applied in run()
         self.pending_destination: Optional[tuple[str, Optional[dict[str, Any]]]] = None
         self.searches: deque[tuple[str, str, str, Optional[dict[str, float]]]] = deque(maxlen=16)  # key, id, q, near
+        self.speed_limits: Any = make_speed_limits(a)   # OsmSpeedLimits or None (--speed-limits off)
 
     def info(self) -> dict[str, Any]:
         return {"mode": self.mode, "available": self.available, "error": self.error,
@@ -748,6 +764,13 @@ class NavWorker(threading.Thread):
 
     def _publish(self, pkt: dict[str, Any]) -> None:
         self.packets += 1
+        if self.speed_limits is not None:
+            try:
+                limit = self.speed_limits.for_packet(pkt, now_ms())      # never waits for the network
+            except Exception as e:  # a lookup bug must not stop navigation
+                limit = None
+                print(f"[nav] speed limit lookup failed: {type(e).__name__}: {e}", flush=True)
+            pkt = {**pkt, "speedLimit": limit}
         self.srv.post(self.srv.broadcast_nav, dumps(pkt).decode())
 
     def run(self) -> None:
@@ -1690,6 +1713,12 @@ def build_parser() -> argparse.ArgumentParser:
                      "src/phase1 (default: env PHASE1_DIR, then <repo>/spatial)")
     nav.add_argument("--node", default="node", help="Node.js executable")
     nav.add_argument("--nav-relay-impl", default=None, help=argparse.SUPPRESS)      # module:Class (tests)
+    nav.add_argument("--speed-limits", default="off", choices=["off", "osm"],
+                     help="navigation.packet.speedLimit: osm = posted limits from OpenStreetMap via the Overpass API "
+                          "(sends the car position to that server); off (default) = no field")
+    nav.add_argument("--speed-limit-endpoint", default=None, metavar="URL",
+                     help="Overpass interpreter URL for --speed-limits osm "
+                          "(default https://overpass-api.de/api/interpreter)")
     tts = ap.add_argument_group("text-to-speech proxy (ElevenLabs via POST /tts, GET /tts/health; key in the "
                                 "environment or perception_engine/.env)")
     tts.add_argument("--no-tts", action="store_true", help="never call ElevenLabs: /tts answers 503 notConfigured")
@@ -1711,6 +1740,9 @@ def main(argv: Optional[list[str]] = None) -> None:
         a.video = resolve_data_path(a.video)          # data/... follows PERCEPTION_DATA_DIR
         if not a.video.exists():
             sys.exit(f"video not found: {a.video}")
+    if a.speed_limits == "osm" and not (a.nav_session or a.nav_route or a.nav_destination or a.nav_live):
+        print("[server] note: --speed-limits osm rides on navigation.packet; without navigation it does nothing",
+              flush=True)
     if a.nav_session and a.mode == "live":
         print("[server] note: --nav-session drives navigation from media time (sim/video); in live mode use "
               "--nav-route / --nav-destination", flush=True)
@@ -1745,7 +1777,8 @@ def main(argv: Optional[list[str]] = None) -> None:
     print(f"  USB (adb)   : adb reverse tcp:{a.port} tcp:{a.port}   then ws://127.0.0.1:{a.port}/perception")
     if a.nav_session or a.nav_route or a.nav_destination or a.nav_live:
         print("  navigation  : " + (f"sim session {a.nav_session}" if a.nav_session else
-                                    f"live ({a.nav_provider}) route={a.nav_route} dest={a.nav_destination}"))
+                                    f"live ({a.nav_provider}) route={a.nav_route} dest={a.nav_destination}")
+              + ("  speed limits: OpenStreetMap" if a.speed_limits == "osm" else ""))
     if a.tts_allow_lan:
         tts_host = a.host if a.host not in ("0.0.0.0", "::", "") else (lan_ips() or ["<laptop-LAN-IP>"])[0]
         tts_scope = "LAN clients allowed (--tts-allow-lan)"

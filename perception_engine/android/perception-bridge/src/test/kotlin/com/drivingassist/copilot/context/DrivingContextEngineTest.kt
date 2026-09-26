@@ -12,6 +12,7 @@ import com.drivingassist.copilot.perception.ReplayPerceptionSource
 import com.drivingassist.copilot.perception.Sign
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -173,11 +174,218 @@ class DrivingContextEngineTest {
         val stop = Sign(4, "stop", listOf(1000.0, 300.0, 1030.0, 330.0), 0.8, 25.0)
         val limit = Sign(5, "speed_limit_45", listOf(1000.0, 200.0, 1030.0, 240.0), 0.9, 30.0)
         val events = mutableListOf<DrivingEvent>()
-        repeat(6) { events += next { s, p -> frame(s, p, signs = listOf(stop, limit)) } }
+        // 1 s at 10 fps: the limit needs 0.8 s of the same read before it is shown.
+        repeat(10) { events += next { s, p -> frame(s, p, signs = listOf(stop, limit)) } }
         assertEquals(1, events.count { it.type == DrivingEventType.STOP_SIGN })
-        assertEquals(1, events.count { it.type == DrivingEventType.SPEED_LIMIT })
+        assertEquals("SPEED LIMIT 45", events.single { it.type == DrivingEventType.SPEED_LIMIT }.text)
         assertEquals(45, engine.context.value.speedLimit)
+        assertEquals(SpeedLimitSource.SIGN, engine.context.value.speedLimitSource)
         assertEquals(Priority.TRAFFIC_ALERT, events.first { it.type == DrivingEventType.STOP_SIGN }.priority)
+    }
+
+    /** A fresh WorldModel + engine at 10 fps (pts = frame index / 10); [clockNs] = the engine's wall clock. */
+    private class Drive(config: DrivingContextConfig = DrivingContextConfig(), clockNs: () -> Long = { 0L }) {
+        val world = WorldModel(clockMs = { 0L })
+        val engine = DrivingContextEngine(config, clockNs)
+        var seq = 0L
+
+        /** [n] frames showing [signs]; returns the SPEED_LIMIT events. */
+        fun frames(n: Int, signs: List<Sign> = emptyList(), nav: NavigationState? = null, pts: Double? = null): List<DrivingEvent> {
+            val out = ArrayList<DrivingEvent>()
+            repeat(n) {
+                val s = seq++
+                out += engine.evaluate(world.update(frame(s, pts ?: (s / 10.0), signs = signs)), nav).events
+            }
+            return out.filter { it.type == DrivingEventType.SPEED_LIMIT }
+        }
+
+        val limit: Int? get() = engine.context.value.speedLimit
+        val source: SpeedLimitSource? get() = engine.context.value.speedLimitSource
+    }
+
+    private fun limitSign(mph: Int, confidence: Double = 0.9, distance: Double? = 40.0, id: Int = 5) =
+        Sign(id, "speed_limit_$mph", listOf(1000.0, 200.0, 1030.0, 240.0), confidence, distance)
+
+    @Test
+    fun `speed limit sign is shown only when strong, near, allowed and held`() {
+        for ((sign, why) in listOf(
+            limitSign(45, confidence = 0.8) to "below 0.85 confidence",
+            limitSign(45, distance = 75.0) to "farther than 60 m",
+            limitSign(47) to "not a multiple of 5",
+            limitSign(90) to "above 85 mph",
+            limitSign(5) to "below 10 mph",
+        )) {
+            val d = Drive()
+            assertTrue(d.frames(20, listOf(sign)).isEmpty(), why)
+            assertNull(d.limit, why)
+            assertNull(d.source, why)
+        }
+        val d = Drive()
+        assertTrue(d.frames(8, listOf(limitSign(45))).isEmpty(), "0.7 s: not held long enough")
+        assertNull(d.limit)
+        assertEquals(listOf("SPEED LIMIT 45"), d.frames(1, listOf(limitSign(45))).map { it.text }, "0.8 s")
+        assertEquals(45, d.limit)
+        assertEquals(SpeedLimitSource.SIGN, d.source)
+        assertTrue(d.frames(20, listOf(limitSign(45))).isEmpty(), "one event per newly confirmed value")
+        assertEquals(35, Drive().apply { frames(9, listOf(limitSign(35, distance = null))) }.limit, "unknown distance is accepted")
+    }
+
+    @Test
+    fun `a newer sign replaces the limit, a changing read restarts`() {
+        val d = Drive()
+        d.frames(9, listOf(limitSign(45)))
+        assertEquals(45, d.limit)
+        assertEquals(listOf("SPEED LIMIT 35"), d.frames(9, listOf(limitSign(35, id = 6))).map { it.text })
+        assertEquals(35, d.limit)
+
+        val flicker = Drive()
+        assertTrue(flicker.frames(5, listOf(limitSign(45))).isEmpty())
+        assertTrue(flicker.frames(5, listOf(limitSign(50))).isEmpty(), "same sign reads 50 from 0.5 s: restarts")
+        assertNull(flicker.limit)
+        assertEquals(listOf("SPEED LIMIT 50"), flicker.frames(4, listOf(limitSign(50))).map { it.text }, "50 held 0.5 -> 1.3 s")
+    }
+
+    @Test
+    fun `sign limit expires after the hold and the map value shows again`() {
+        val nav = NavigationState(Maneuver.FOLLOW_ROAD, 5000.0, "I-75", mapSpeedLimitMph = 55, mapSpeedLimitRoad = "I-75")
+        val d = Drive()
+        assertTrue(d.frames(1, nav = nav).isEmpty())
+        assertEquals(55, d.limit)
+        assertEquals(SpeedLimitSource.MAP, d.source)
+        d.frames(9, listOf(limitSign(45)), nav)
+        assertEquals(45, d.limit, "a confirmed sign wins over the map")
+        assertEquals(SpeedLimitSource.SIGN, d.source)
+        d.frames(1, nav = nav, pts = 500.0)
+        assertEquals(45, d.limit, "kept within 600 s")
+        d.frames(1, nav = nav, pts = 601.0)
+        assertEquals(55, d.limit, "600 s without a new read")
+        assertEquals(SpeedLimitSource.MAP, d.source)
+    }
+
+    @Test
+    fun `passing a turn clears the sign limit, a far reroute does not`() {
+        fun turn(dist: Double) = NavigationState(Maneuver.TURN_RIGHT, dist, "North Ave")
+        val d = Drive()
+        d.frames(9, listOf(limitSign(35)), turn(300.0))
+        assertEquals(35, d.limit)
+        d.frames(1, nav = NavigationState(Maneuver.TURN_LEFT, 200.0, "Spring St"))
+        assertEquals(35, d.limit, "target changed 200 m before it: not passed")
+        d.frames(1, nav = NavigationState(Maneuver.TURN_LEFT, 60.0, "Spring St"))
+        assertEquals(35, d.limit, "same target")
+        d.frames(1, nav = NavigationState(Maneuver.ARRIVE, 400.0, "Student Center"))
+        assertNull(d.limit, "the turn at 60 m was passed: another road")
+        assertNull(d.source)
+    }
+
+    @Test
+    fun `passing the first of two unnamed turns the same way clears the sign limit`() {
+        fun right(dist: Double, id: String?) = NavigationState(Maneuver.TURN_RIGHT, dist, eventId = id)
+        val d = Drive()
+        d.frames(9, listOf(limitSign(25)), right(300.0, "step_3"))
+        d.frames(1, nav = right(40.0, "step_3"))
+        assertEquals(25, d.limit, "same step, not passed yet")
+        d.frames(1, nav = right(900.0, "step_4"))
+        assertNull(d.limit, "another step replaced the right turn at 40 m")
+
+        // No step ids (a hand-built state): the target distance jumping back up counts as passed.
+        val e = Drive()
+        e.frames(9, listOf(limitSign(25)), right(300.0, null))
+        e.frames(1, nav = right(40.0, null))
+        e.frames(1, nav = right(45.0, null))
+        assertEquals(25, e.limit, "GPS noise at the turn is not a pass")
+        e.frames(1, nav = right(900.0, null))
+        assertNull(e.limit)
+    }
+
+    @Test
+    fun `map value or road change after passing the sign clears the sign limit, no navigation gives no map value`() {
+        val north = NavigationState(Maneuver.FOLLOW_ROAD, 3000.0, "North Ave", mapSpeedLimitMph = 35, mapSpeedLimitRoad = "North Ave")
+        val d = Drive()
+        d.frames(9, listOf(limitSign(45)), north) // last read at 0.8 s
+        assertEquals(45, d.limit)
+        d.frames(1, nav = north.copy(mapSpeedLimitMph = 40, mapSpeedLimitRoad = null))
+        d.frames(70, nav = north.copy(mapSpeedLimitMph = 40)) // up to 7.9 s
+        assertEquals(45, d.limit, "the map way splits at the sign (40, out of date): the confirmed sign still wins")
+        assertEquals(SpeedLimitSource.SIGN, d.source)
+        d.frames(10, nav = north.copy(mapSpeedLimitMph = 40, mapSpeedLimitRoad = null)) // 8.9 s
+        assertEquals(45, d.limit, "an unnamed road is not a change (the anchor kept North Ave)")
+        d.frames(1, nav = north.copy(mapSpeedLimitMph = 40, mapSpeedLimitRoad = "Spring St"))
+        assertEquals(40, d.limit, "map road changed 8 s after the last read of the sign")
+        assertEquals(SpeedLimitSource.MAP, d.source)
+        assertTrue(d.frames(8, listOf(limitSign(45)), north).isEmpty(), "reads from before the clear do not count")
+        assertEquals(1, d.frames(1, listOf(limitSign(45)), north).size)
+        assertEquals(45, d.limit)
+        d.frames(75, nav = north) // last read at 9.9 s
+        d.frames(1, nav = north.copy(mapSpeedLimitMph = 40)) // 17.5 s
+        assertEquals(45, d.limit, "7.6 s after the last read: passing the sign")
+        d.frames(10, nav = north.copy(mapSpeedLimitMph = 40))
+        assertEquals(45, d.limit)
+        d.frames(1, nav = north.copy(mapSpeedLimitMph = 50)) // 18.6 s
+        assertEquals(50, d.limit, "map value changed after passing the sign")
+        d.frames(1, nav = null)
+        assertNull(d.limit, "no (or a stale) navigation packet: no map value")
+    }
+
+    @Test
+    fun `sign limit is kept while perception is stale and cleared on reset`() {
+        val d = Drive()
+        d.frames(9, listOf(limitSign(45)))
+        val stale = d.world.snapshot.value.copy(perceptionStale = true)
+        assertEquals(45, d.engine.evaluate(stale).context.speedLimit)
+        assertEquals(SpeedLimitSource.SIGN, d.engine.context.value.speedLimitSource)
+        d.engine.reset()
+        assertNull(d.engine.evaluate(stale).context.speedLimit)
+    }
+
+    @Test
+    fun `while perception is stale the sign limit is timed on the wall clock`() {
+        var wallMs = 0L
+        val d = Drive(clockNs = { wallMs * 1_000_000L })
+        val nav = NavigationState(Maneuver.FOLLOW_ROAD, 5000.0, "I-75")
+        d.frames(9, listOf(limitSign(45)), nav)
+        val stale = d.world.snapshot.value.copy(perceptionStale = true) // media time stops at 0.8 s
+        assertEquals(45, d.engine.evaluate(stale, nav).context.speedLimit)
+        wallMs = 29_999
+        assertEquals(45, d.engine.evaluate(stale, null).context.speedLimit, "kept through a short outage")
+        wallMs = 30_000
+        assertNull(d.engine.evaluate(stale, null).context.speedLimit, "30 s stale: unknown")
+        assertNull(d.engine.context.value.speedLimitSource)
+
+        // Fresh perception restarts the stale timer; the rest of the 600 s hold caps it.
+        wallMs = 0L
+        val e = Drive(clockNs = { wallMs * 1_000_000L })
+        e.frames(9, listOf(limitSign(45)))
+        e.frames(1, pts = 20.0)
+        val blip = e.world.snapshot.value.copy(perceptionStale = true)
+        e.engine.evaluate(blip)
+        wallMs = 20_000
+        e.frames(1, pts = 590.0) // perception back: 589.2 s of the hold used
+        assertEquals(45, e.limit)
+        e.engine.evaluate(e.world.snapshot.value.copy(perceptionStale = true))
+        wallMs = 30_000
+        assertEquals(45, e.engine.evaluate(e.world.snapshot.value.copy(perceptionStale = true)).context.speedLimit)
+        wallMs = 30_900
+        assertNull(e.engine.evaluate(e.world.snapshot.value.copy(perceptionStale = true)).context.speedLimit, "hold ran out")
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun `run - a sign limit held while perception is stale runs out without new input`() = runTest {
+        val d = Drive(clockNs = { testScheduler.currentTime * 1_000_000L })
+        d.frames(9, listOf(limitSign(45)))
+        val world = MutableStateFlow(d.world.snapshot.value)
+        val nav = MutableStateFlow<NavigationState?>(null)
+        backgroundScope.launch { d.engine.run(world, nav) }
+        runCurrent()
+        world.value = world.value.copy(perceptionStale = true, revision = world.value.revision + 1) // link lost
+        runCurrent()
+        assertEquals(45, d.limit)
+        advanceTimeBy(29_000)
+        runCurrent()
+        assertEquals(45, d.limit)
+        advanceTimeBy(1_100)
+        runCurrent()
+        assertNull(d.limit, "30 s stale with no new input: unknown")
     }
 
     @Test

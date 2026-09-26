@@ -13,15 +13,18 @@ import java.util.Locale
 import kotlin.math.roundToInt
 
 /**
- * What the tablet shows of the phase1 route: read straight off the newest `navigation.packet`. No route
- * logic here (phase1 decides maneuvers, distances and progress); this only picks fields and formats them.
+ * What the tablet shows of the phase1 route: read off the newest `navigation.packet`. phase1 decides maneuvers,
+ * distances and progress; the maneuver fields describe the next real maneuver ([NavigationMapper.target]:
+ * phase1's active one, or the first real one after a GO_STRAIGHT / START_ROUTE step). Otherwise this only picks
+ * fields and formats them.
  */
 data class RouteGuide(
     val maneuver: Maneuver,
-    /** phase1 `activeManeuver.type` / `routeState.action`, e.g. TURN_RIGHT, GO_STRAIGHT. */
+    /** phase1 type of the target maneuver, e.g. TURN_RIGHT, KEEP_RIGHT; GO_STRAIGHT only when nothing real is ahead. */
     val action: String,
+    /** left | right | straight | merge | exit (phase1's `routeSemantics.turnDirection` for the target). */
     val turnDirection: String?,
-    /** Metres from the car to the active maneuver when the packet was built (`routeState.distanceMeters`). */
+    /** Metres from the car to the target maneuver when the packet was built. */
     val distanceMeters: Double?,
     /** phase1 `spatialInstructions[0].type`: TURN_ARROW, LANE_ARROW, EXIT_MARKER, WARNING, DISTANCE_LABEL. */
     val spatialType: String?,
@@ -43,7 +46,7 @@ data class RouteGuide(
     val receivedAtNs: Long,
     /** Identifies the route (phase1 routeId / tripId): voice prompts reset on a new one. */
     val routeKey: String = "",
-    /** Identifies the active maneuver of the route (phase1 activeManeuver.eventId): each prompt stage once per key. */
+    /** Identifies the target maneuver of the route ("<routeKey>/<phase1 eventId>"): each prompt stage once per key. */
     val eventKey: String = "",
     /** phase1 `route.polyline` (Google's overview polyline, or the mock provider's): the mini-map's route line. */
     val polyline: String? = null,
@@ -53,6 +56,10 @@ data class RouteGuide(
     val headingDegrees: Double? = null,
 ) {
     val isArrival: Boolean get() = maneuver == Maneuver.ARRIVE
+
+    /** An exit: phase1's EXIT, or a Google ramp (KEEP_LEFT / KEEP_RIGHT) whose instruction names an exit number. */
+    val isExit: Boolean
+        get() = maneuver == Maneuver.EXIT || (exitNumber != null && (maneuver == Maneuver.KEEP_LEFT || maneuver == Maneuver.KEEP_RIGHT))
 
     /** e.g. "TURN RIGHT", "EXIT 56", "KEEP LEFT", "CONTINUE". */
     val headline: String
@@ -76,9 +83,15 @@ data class RouteGuide(
     fun distanceAt(nowNs: Long, ptsNow: Double? = null): Double? {
         val d = distanceMeters ?: return null
         val v = speedMps?.takeIf { it > 0.3 } ?: return d
-        val dt = if (ptsNow != null && ptsSeconds != null) ptsNow - ptsSeconds else (nowNs - receivedAtNs) / 1e9
-        return (d - v * dt.coerceIn(0.0, MAX_EXTRAPOLATION_S)).coerceAtLeast(0.0)
+        return (d - v * ageSeconds(nowNs, ptsNow).coerceIn(0.0, MAX_EXTRAPOLATION_S)).coerceAtLeast(0.0)
     }
+
+    /** Seconds since the packet at [nowNs] (bridge clock) or, in sim, at media time [ptsNow]: the clock [distanceAt] uses. */
+    fun ageSeconds(nowNs: Long, ptsNow: Double? = null): Double =
+        if (ptsNow != null && ptsSeconds != null) ptsNow - ptsSeconds else (nowNs - receivedAtNs) / 1e9
+
+    /** Older than the extrapolation cap: [distanceAt] no longer moves, so the distance is not known any more. */
+    fun heldAt(nowNs: Long, ptsNow: Double? = null): Boolean = ageSeconds(nowNs, ptsNow) > MAX_EXTRAPOLATION_S
 
     companion object {
         const val MAX_EXTRAPOLATION_S = 2.0
@@ -91,18 +104,18 @@ data class RouteGuide(
             val traveled = progress.num("distanceTraveledMeters")
             val spatial = (packet?.get("spatialInstructions") as? JsonArray)?.firstOrNull() as? JsonObject
             val anchorRoute = spatial.obj("anchor").num("routeDistanceMeters")
-            val semantics = packet.obj("routeSemantics")
             val routeKey = packet.str("routeId") ?: packet.str("tripId") ?: "route"
-            val eventId = packet.obj("activeManeuver").str("eventId") ?: "${rs.action}@${anchorRoute ?: "?"}"
+            val target = NavigationMapper.target(rs, packet)
+            val eventId = target.eventId ?: "${rs.action}@${anchorRoute ?: "?"}"
             return RouteGuide(
-                maneuver = NavigationMapper.maneuverFor(rs.action, rs.turnDirection),
-                action = rs.action,
-                turnDirection = rs.turnDirection,
-                distanceMeters = rs.distanceMeters?.takeIf { !it.isNaN() && it >= 0 },
+                maneuver = NavigationMapper.maneuverFor(target.action, target.turnDirection),
+                action = target.action,
+                turnDirection = target.turnDirection,
+                distanceMeters = target.distanceMeters,
                 spatialType = spatial.str("type"),
                 anchorAheadMeters = if (anchorRoute != null && traveled != null) (anchorRoute - traveled).coerceAtLeast(0.0) else rs.distanceMeters,
-                roadName = rs.roadName?.takeIf { it.isNotBlank() } ?: semantics.str("roadName"),
-                exitNumber = semantics.str("exitNumber"),
+                roadName = target.roadName,
+                exitNumber = target.exitNumber,
                 destination = packet.obj("destination").str("label"),
                 etaSeconds = rs.etaSeconds,
                 remainingMeters = rs.remainingDistanceMeters,

@@ -4,7 +4,7 @@ import com.drivingassist.copilot.bridge.LinkState
 import com.drivingassist.spatialcopilot.voice.VoiceState
 import java.util.Locale
 
-/** What the chrome shows: the status chip, at most one banner, and the debug numbers. */
+/** What the chrome shows: the status chip, at most one banner and the debug numbers (debug view); [short] (clean view). */
 data class StatusUi(
     val line1: String,
     val line2: String?,
@@ -13,6 +13,8 @@ data class StatusUi(
     val banner: String?,
     /** Debug view only: link / latency / navigation / voice details, one item per line. */
     val debugLines: List<String>,
+    /** Clean view: the most important degraded state in a few words (<= 30 chars) by the corner button; null = nothing to say. */
+    val short: String? = null,
 ) {
     enum class Level { OK, WARN, ERROR }
 
@@ -40,7 +42,8 @@ object StatusModel {
         if (mode == SourceMode.DEMO) {
             lines += "DEMO: scripted scene and placeholder route, no laptop"
             lines += "voice: ${voice.label}"
-            return StatusUi("DEMO", "scripted scene · tap for settings", StatusUi.Level.WARN, null, lines)
+            lines += speedLimitLine(session)
+            return StatusUi("DEMO", "scripted scene · tap for settings", StatusUi.Level.WARN, null, lines, "DEMO · scripted scene")
         }
         val k = session.link!!.value
         val ctx = session.context.value
@@ -49,21 +52,26 @@ object StatusModel {
         val line1 = StringBuilder(mode.name)
         var line2: String? = null
         var banner: String? = null
+        var linkShort: String? = null
+        var staleShort: String? = null
         when {
             k.state != LinkState.CONNECTED -> {
                 line1.append(" · LAPTOP NOT CONNECTED")
                 line2 = k.lastError?.take(70) ?: settings.serverUrl
                 level = StatusUi.Level.ERROR
                 banner = "Laptop not connected: no road alerts. Check the server and adb reverse tcp:8765 tcp:8765."
+                linkShort = "Laptop not connected"
             }
             !k.serverReady -> {
                 line1.append(" · WAITING FOR LAPTOP")
                 level = StatusUi.Level.WARN
+                linkShort = "Waiting for laptop"
             }
             k.takenOver -> {
                 line1.append(" · TAKEN OVER")
                 line2 = "another client controls the laptop; tap to take it back"
                 level = StatusUi.Level.WARN
+                linkShort = "Taken over · tap to take back"
             }
             else -> {
                 line1.append(" · ").append(k.resultFps?.let { f1(it) } ?: "-").append(" fps")
@@ -75,6 +83,7 @@ object StatusModel {
                 if (ctx.perceptionStale) {
                     level = StatusUi.Level.WARN
                     banner = "Road alerts paused: perception results are late. Navigation only."
+                    staleShort = "Road alerts paused"
                 }
             }
         }
@@ -84,19 +93,29 @@ object StatusModel {
             if (level == StatusUi.Level.OK) level = StatusUi.Level.WARN
         }
 
-        // Navigation health (phase1 on the laptop, fed by GPS in LIVE and by media time in SIM).
-        val navLine = when {
-            k.serverNavigationError?.contains("waiting for a destination") == true ->
-                if (settings.destination.isBlank()) "Live navigation is on: tap Where to? to pick a destination." else "Sending the destination to the laptop..."
-            k.serverNavigationAvailable == false || k.serverNavigationMode == "off" ->
-                "Route unavailable" + (k.serverNavigationError?.let { ": ${it.take(60)}" } ?: " (laptop runs no navigation)")
+        // Navigation health (phase1 on the laptop, fed by GPS in LIVE and by media time in SIM). No short form for
+        // what the clean view already shows: off route is in the instruction banner, a missing destination in "Where to?".
+        val nav: Degraded? = when {
+            k.serverNavigationError?.contains("waiting for a destination") == true -> Degraded(
+                if (settings.destination.isBlank()) "Live navigation is on: tap Where to? to pick a destination." else "Sending the destination to the laptop...",
+                null,
+            )
+            k.serverNavigationAvailable == false || k.serverNavigationMode == "off" -> Degraded(
+                "Route unavailable" + (k.serverNavigationError?.let { ": ${it.take(60)}" } ?: " (laptop runs no navigation)"),
+                "Route unavailable",
+            )
             route == null -> null
-            route.stale -> "Navigation paused: no route update for 10 s. Last route shown."
-            route.offRoute -> "Off route. phase1 is re-matching the position."
+            route.stale -> Degraded("Navigation paused: no route update for 10 s. Last route shown.", "Route paused")
+            route.offRoute -> Degraded("Off route. phase1 is re-matching the position.", null)
             else -> null
-        }
-        val gpsLine = if (mode == SourceMode.LIVE) gpsLine(session, nowMs) else null
-        banner = banner ?: gpsLine ?: navLine?.takeIf { k.state == LinkState.CONNECTED }
+        }?.takeIf { k.state == LinkState.CONNECTED }
+        val gps = if (mode == SourceMode.LIVE) gpsLine(session, nowMs) else null
+        banner = banner ?: gps?.banner ?: nav?.banner
+        val short = linkShort ?: session.problem.value?.let(::problemShort) ?: staleShort
+            ?: k.serverError?.let { if (it.contains("live navigation is not running")) "Live navigation off" else "Laptop error" }
+            ?: gps?.short ?: nav?.short
+        // Every short form is a degraded state: the corner dot is not mint while one is shown.
+        if (short != null && level == StatusUi.Level.OK) level = StatusUi.Level.WARN
 
         lines += "link ${k.state} ready=${k.serverReady} role=${k.role ?: "-"} rtt ${k.rttMs?.let(::f0) ?: "-"} ms"
         lines += "results ${k.resultFps?.let(::f1) ?: "-"} fps · updates ${k.updateFps?.let(::f1) ?: "-"} fps · uplink ${k.uplinkFps?.let(::f1) ?: "-"} fps"
@@ -115,19 +134,42 @@ object StatusModel {
         val f = ctx.following
         lines += "following ${f.state} lead ${f.leadTrackId ?: "none"} d ${f.distanceMeters?.let(::f1) ?: "--"} m ttc ${f.ttcSeconds?.let(::f1) ?: "--"} s"
         lines += "voice: ${voice.label}"
+        lines += speedLimitLine(session)
         k.clockWarning?.let { lines += "clock: $it" }
-        return StatusUi(line1.toString(), line2, level, banner, lines)
+        return StatusUi(line1.toString(), line2, level, banner, lines, short)
     }
 
-    private fun gpsLine(session: CopilotSession, nowMs: Long): String? {
-        if (session.gpsAvailable.value == false) return "No location: turn Location on for live navigation. Last route held."
-        val fix = session.gps.value ?: return if (session.gpsAvailable.value == true) "Waiting for GPS. Last route held." else null
+    /** A degraded state: the banner sentence and the clean view's short form (null = not shown there). */
+    private data class Degraded(val banner: String, val short: String?)
+
+    private fun gpsLine(session: CopilotSession, nowMs: Long): Degraded? {
+        if (session.gpsAvailable.value == false) {
+            return Degraded("No location: turn Location on for live navigation. Last route held.", "Location off")
+        }
+        val fix = session.gps.value
+            ?: return if (session.gpsAvailable.value == true) Degraded("Waiting for GPS. Last route held.", "No GPS fix") else null
         val age = nowMs - fix.receivedAtMs
         return when {
-            age > GPS_STALE_MS -> "No new location fix for ${age / 1000} s (${fix.provider}). Last route held."
-            (fix.accuracyMeters ?: 0.0) > GPS_POOR_ACCURACY_M -> "GPS accuracy ±${f0(fix.accuracyMeters!!)} m: route progress may jump."
+            age > GPS_STALE_MS -> Degraded("No new location fix for ${age / 1000} s (${fix.provider}). Last route held.", "No GPS fix")
+            (fix.accuracyMeters ?: 0.0) > GPS_POOR_ACCURACY_M ->
+                Degraded("GPS accuracy ±${f0(fix.accuracyMeters!!)} m: route progress may jump.", "Weak GPS")
             else -> null
         }
+    }
+
+    /** [CopilotSession.problem] (camera, player, missing clip, a failed loop) in a few words. */
+    private fun problemShort(p: String): String = when {
+        p.startsWith("Camera") || p.startsWith("No camera") -> "Camera problem"
+        p.startsWith("No clip") -> "Clip missing"
+        p.startsWith("Player") -> "Video problem"
+        else -> "App problem"
+    }
+
+    /** Debug line: the limit the Driving Context shows and where it comes from. */
+    private fun speedLimitLine(session: CopilotSession): String {
+        val ctx = session.context.value
+        val limit = ctx.speedLimit ?: return "speed limit unknown"
+        return "speed limit $limit mph (${ctx.speedLimitSource?.name?.lowercase(Locale.ROOT) ?: "?"})"
     }
 
     private fun f0(x: Double) = String.format(Locale.ROOT, "%.0f", x)

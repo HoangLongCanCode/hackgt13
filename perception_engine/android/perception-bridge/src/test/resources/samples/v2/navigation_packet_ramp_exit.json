@@ -1,0 +1,17 @@
+{"type":"navigation.packet","schemaVersion":2,"serverTimeMs":1790000005000,"ptsSeconds":null,"tripTimestampMs":1790000004950,
+ "routeState":{"action":"GO_STRAIGHT","audio":"Continue straight in 150 m.","ui":"DISTANCE_LABEL","distanceMeters":150,"offRoute":false,"etaSeconds":310,"remainingDistanceMeters":4150,"requiredLane":null,"turnDirection":"straight","roadName":"I-75 N"},
+ "packet":{"packetType":"SPATIAL_NAVIGATION_PACKET","tripId":"live-02","routeId":"route_9","generatedAtMs":1790000004950,
+  "source":{"provider":"mock"},
+  "destination":{"label":"Midtown Arts Center","coordinate":{"lat":33.7896,"lng":-84.3857}},
+  "progress":{"currentLocation":{"lat":33.7712,"lng":-84.3921},"heading":4.0,"speedMps":13.4,"routeIndex":18,"distanceTraveledMeters":1050,"remainingDistanceMeters":4150,"etaSeconds":310,"offRoute":false},
+  "route":{"polyline":"_p~iF~ps|U_ulLnnqC","steps":[],"totalDistanceMeters":5200,"totalDurationSeconds":420},
+  "activeManeuver":{"eventId":"step_3","type":"GO_STRAIGHT","distanceMeters":1200,"roadName":"I-75 N","instruction":"Continue onto I-75 N"},
+  "upcomingManeuvers":[
+   {"eventId":"step_3","type":"GO_STRAIGHT","distanceMeters":1200,"roadName":"I-75 N","instruction":"Continue onto I-75 N","priority":1},
+   {"eventId":"step_4","type":"KEEP_RIGHT","distanceMeters":3400,"roadName":"10th Street","exitNumber":"94","instruction":"Take exit 94 toward 10th Street","priority":2},
+   {"eventId":"step_5","type":"ARRIVE","distanceMeters":5200,"roadName":"Midtown Arts Center","instruction":"Arrive at Midtown Arts Center","priority":3}],
+  "spatialInstructions":[{"id":"spatial_step_3","type":"DISTANCE_LABEL","anchor":{"kind":"ROUTE_POINT","routeDistanceMeters":1200},"content":"CONTINUE STRAIGHT\n150 m","priority":2,"lifetimeMs":8000}],
+  "audioInstructions":[{"id":"audio_step_3","content":"Continue straight in 150 m.","priority":2,"speakAtDistanceMeters":1200}],
+  "routeSemantics":{"roadName":"I-75 N","turnDirection":"straight"},
+  "handoffHints":{"confidence":0.95,"displayPriority":2,"staleAfterMs":5000}},
+ "speedLimit":{"valueMph":35,"source":"osm","roadName":"North Avenue Northwest","wayId":123456,"queriedAtMs":1790000004000}}

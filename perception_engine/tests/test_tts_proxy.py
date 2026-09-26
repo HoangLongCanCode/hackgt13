@@ -254,8 +254,12 @@ async def test_spend_guard():
         rs = await asyncio.gather(*held)
         assert [x.status_code for x in rs] == [200, 200, 200], [x.text for x in rs]
         assert rs[0].content == rs[2].content and len(h.fake.calls) == 2              # duplicate shared one call
+    # The default minute budget holds a cold-cache warm-up of the whole fixed pack plus 1,000 runtime characters.
+    pack = sum(len(p) for p in json.loads(CATALOG_PATH.read_text(encoding="utf-8"))["fixedPhrases"])
+    minute = TtsProxy(FAKE_KEY, FAKE_VOICE).guard.minute_chars
+    assert minute >= pack + 1000, (minute, pack)
     return "minute 40 chars: 3rd call 429 + Retry-After, hit still served; day limit 429; 3rd concurrent call 429, " \
-           "duplicate joins the in-flight call"
+           f"duplicate joins the in-flight call; default {minute}/min >= pack {pack} + 1000"
 
 
 async def test_loopback():

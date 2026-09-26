@@ -83,35 +83,69 @@ class ArSceneTest {
     )
 
     @Test
-    fun `lead vehicle is highlighted only in CLOSE or TOO CLOSE and only with a distance`() {
+    fun `lead vehicle - clean view brackets only TOO CLOSE without a badge, debug also CLOSE, never without a distance`() {
         val b = ArSceneBuilder()
         assertNull(b.build(input(FollowingState.NORMAL, 25.0), 2560f, 1600f, 1L).lead)
-        val close = b.build(input(FollowingState.CLOSE, 12.34), 2560f, 1600f, 2L).lead!!
-        assertEquals("Vehicle ahead: 12.3 m", close.label)
-        assertEquals(false, close.critical)
+        assertNull("clean view: no CLOSE highlight", b.build(input(FollowingState.CLOSE, 12.34), 2560f, 1600f, 2L).lead)
         val critical = b.build(input(FollowingState.CRITICAL, 8.44), 2560f, 1600f, 3L).lead!!
         assertEquals("Vehicle ahead: 8.4 m", critical.label)
         assertTrue(critical.critical)
+        assertFalse("the HUD shows the distance", critical.badge)
         assertNull("no distance, no highlight", b.build(input(FollowingState.CRITICAL, null), 2560f, 1600f, 4L).lead)
         assertNull("clean view has no debug layer", b.build(input(FollowingState.NORMAL, 25.0), 2560f, 1600f, 5L).debug)
         assertNotNull(b.build(input(FollowingState.NORMAL, 25.0, debug = true), 2560f, 1600f, 6L).debug)
+        val close = b.build(input(FollowingState.CLOSE, 12.34, debug = true), 2560f, 1600f, 7L).lead!!
+        assertEquals("Vehicle ahead: 12.3 m", close.label)
+        assertEquals(false, close.critical)
+        assertTrue(close.badge)
+        assertTrue(b.build(input(FollowingState.CRITICAL, 8.44, debug = true), 2560f, 1600f, 8L).lead!!.badge)
     }
 
     @Test
-    fun `arrows fade in on the road and fade out when the route stops being relevant`() {
+    fun `debug chevrons fade in on the road and fade out when the route stops being relevant`() {
         val b = ArSceneBuilder()
         val r = route(Maneuver.TURN_RIGHT, "right")
         var t = 1_000_000_000L
-        var scene = b.build(input(FollowingState.NORMAL, 25.0, r), 2560f, 1600f, t)
-        repeat(30) { t += 16_000_000L; scene = b.build(input(FollowingState.NORMAL, 25.0, r), 2560f, 1600f, t) }
+        var scene = b.build(input(FollowingState.NORMAL, 25.0, r, debug = true), 2560f, 1600f, t)
+        repeat(30) { t += 16_000_000L; scene = b.build(input(FollowingState.NORMAL, 25.0, r, debug = true), 2560f, 1600f, t) }
         assertEquals(ArrowKind.TURN_RIGHT, scene.arrowKind)
         assertTrue("chevrons drawn", scene.chevrons.size >= 3)
         assertTrue("fully faded in", scene.chevrons.maxOf { it.alpha } > 0.5f)
         // All chevrons sit below the horizon row, i.e. on the road.
         val horizon = FillCenter(960, 540, 2560f, 1600f).point(0.0, 250.0).y
         assertTrue(scene.chevrons.all { it.tip.y > horizon && it.left.y > horizon })
-        repeat(40) { t += 16_000_000L; scene = b.build(input(FollowingState.NORMAL, 25.0, null), 2560f, 1600f, t) }
+        repeat(40) { t += 16_000_000L; scene = b.build(input(FollowingState.NORMAL, 25.0, null, debug = true), 2560f, 1600f, t) }
         assertNull(scene.arrowKind)
+        assertTrue(scene.chevrons.isEmpty())
+        assertTrue(scene.laneArrows.isEmpty())
+    }
+
+    @Test
+    fun `clean view draws the lane arrow, no chevrons, no ribbon`() {
+        val b = ArSceneBuilder()
+        val r = route(Maneuver.TURN_RIGHT, "right")
+        var t = 1_000_000_000L
+        var scene = b.build(input(FollowingState.NORMAL, 25.0, r), 2560f, 1600f, t)
+        repeat(30) { t += 16_000_000L; scene = b.build(input(FollowingState.NORMAL, 25.0, r), 2560f, 1600f, t) }
+        assertTrue(scene.chevrons.isEmpty())
+        assertTrue(scene.ribbon.isEmpty())
+        assertNull(scene.debug)
+        // No lane guidance: the ego lane's arrow alone, green, shaped for the turn 30 m ahead.
+        val a = scene.laneArrows.single()
+        assertNull(a.lane)
+        assertEquals(LaneArrowStyle.TARGET, a.style)
+        assertEquals(LaneArrowGlyph.TURN_RIGHT, a.glyph)
+    }
+
+    @Test
+    fun `clean view keeps the destination pin`() {
+        val b = ArSceneBuilder()
+        val r = route(Maneuver.ARRIVE)
+        var t = 1_000_000_000L
+        var scene = b.build(input(FollowingState.NORMAL, 25.0, r), 2560f, 1600f, t)
+        repeat(10) { t += 16_000_000L; scene = b.build(input(FollowingState.NORMAL, 25.0, r), 2560f, 1600f, t) }
+        assertEquals(ArrowKind.ARRIVE, scene.arrowKind)
+        assertNotNull(scene.pin)
         assertTrue(scene.chevrons.isEmpty())
     }
 

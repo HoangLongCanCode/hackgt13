@@ -12,8 +12,10 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.ClipOp
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
@@ -21,6 +23,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
@@ -32,6 +35,7 @@ import com.drivingassist.spatialcopilot.ar.ArInput
 import com.drivingassist.spatialcopilot.ar.ArScene
 import com.drivingassist.spatialcopilot.ar.ArSceneBuilder
 import com.drivingassist.spatialcopilot.ar.DebugLayer
+import com.drivingassist.spatialcopilot.ar.LaneArrowStyle
 import com.drivingassist.spatialcopilot.ar.LeadHighlight
 import com.drivingassist.spatialcopilot.ar.Vec2
 import com.drivingassist.spatialcopilot.ar.ViewRect
@@ -46,18 +50,37 @@ private val Mint = Color(0xFF7DFFC3)
 private val Cyan = Color(0xFF9BE7FF)
 private val Amber = Color(0xFFFFC56B)
 private val Alert = Color(0xFFFF5A4E)
+private val LaneGreen = Color(0xFF46E27A)
+private val LaneRed = Color(0xFFFF4B3E)
+
+/** Debug-only top / bottom shade. */
+private val Vignette = Brush.verticalGradient(
+    0f to Color.Black.copy(alpha = 0.28f),
+    0.18f to Color.Transparent,
+    0.72f to Color.Transparent,
+    1f to Color.Black.copy(alpha = 0.40f),
+)
+
+/** Paths reused every frame (the Tab S9 draws at 60-120 Hz). */
+private class ArPaths {
+    val arrow = Path()
+    val clip = Path()
+}
 
 /**
  * Spatial AR Engine: draws, every display frame, the [ArScene] built from the session's world (moved to
- * display time), Driving Context and route. It decides nothing itself: arrows come from phase1's route
- * via [com.drivingassist.spatialcopilot.ar.RouteArrows], the highlighted vehicle from the Driving Context.
- * Clean view: road arrows and the lead-vehicle highlight only. Debug adds every box, lane lines, the
- * fitted ego lane, anchors and the horizon.
+ * display time), Driving Context and route. It decides nothing itself: lane arrows come from the lane
+ * model and the Driving Context's lane guidance, the maneuver from phase1's route, the highlighted
+ * vehicle from the Driving Context.
+ * Clean view: flat lane arrows on the road, the destination pin, and red brackets on the lead vehicle
+ * in TOO CLOSE. Debug adds the shade, the chevron path, the CLOSE highlight and badges, every box, lane
+ * lines, the fitted ego lane, anchors, the horizon and the lane state.
  */
 @Composable
 fun SpatialArEngine(session: CopilotSession, debug: Boolean, modifier: Modifier = Modifier) {
     val textMeasurer = rememberTextMeasurer()
     val builder = remember(session) { ArSceneBuilder() }
+    val paths = remember { ArPaths() }
     var frameNs by remember { mutableLongStateOf(0L) }
     LaunchedEffect(session) {
         while (true) withFrameNanos { frameNs = it }
@@ -65,14 +88,7 @@ fun SpatialArEngine(session: CopilotSession, debug: Boolean, modifier: Modifier 
 
     Canvas(modifier.fillMaxSize()) {
         val t = frameNs / 1e9f // read every frame: the canvas redraws at display rate
-        drawRect(
-            brush = Brush.verticalGradient(
-                0f to Color.Black.copy(alpha = 0.28f),
-                0.18f to Color.Transparent,
-                0.72f to Color.Transparent,
-                1f to Color.Black.copy(alpha = 0.40f),
-            ),
-        )
+        if (debug) drawRect(brush = Vignette)
         val route = session.route.value
         val input = ArInput(
             world = session.displayWorld(),
@@ -85,8 +101,41 @@ fun SpatialArEngine(session: CopilotSession, debug: Boolean, modifier: Modifier 
         // DEMO has no camera picture: sketch the scripted road (lane lines, the car ahead) under the overlay.
         if (session.settings.mode == SourceMode.DEMO) drawDemoSketch(input.world)
         scene.debug?.let { drawDebug(it, textMeasurer) }
+        drawLaneArrows(scene, paths)
         drawArrows(scene)
         scene.lead?.let { drawLead(it, textMeasurer, t) }
+    }
+}
+
+/** Filled arrows with a thin dark edge, never painted over the road users in [ArScene.occluders]. */
+private fun DrawScope.drawLaneArrows(scene: ArScene, paths: ArPaths) {
+    if (scene.laneArrows.isEmpty()) return
+    if (scene.occluders.isEmpty()) {
+        laneArrowFills(scene, paths.arrow)
+        return
+    }
+    val clip = paths.clip
+    clip.reset()
+    scene.occluders.forEach { clip.addRect(Rect(it.left, it.top, it.right, it.bottom)) }
+    clipPath(clip, ClipOp.Difference) { laneArrowFills(scene, paths.arrow) }
+}
+
+private fun DrawScope.laneArrowFills(scene: ArScene, path: Path) {
+    val edge = Stroke(width = 2.dp.toPx(), join = StrokeJoin.Round)
+    for (a in scene.laneArrows) {
+        val pts = a.outline
+        if (pts.size < 3) continue
+        path.reset()
+        path.moveTo(pts[0].x, pts[0].y)
+        for (i in 1 until pts.size) path.lineTo(pts[i].x, pts[i].y)
+        path.close()
+        val color = when (a.style) {
+            LaneArrowStyle.TARGET, LaneArrowStyle.TARGET_BLINK -> LaneGreen
+            LaneArrowStyle.WRONG -> LaneRed
+            LaneArrowStyle.OTHER -> Color.White
+        }
+        drawPath(path, color, alpha = a.alpha)
+        drawPath(path, Color.Black, alpha = 0.35f * a.alpha, style = edge)
     }
 }
 
@@ -133,6 +182,7 @@ private fun DrawScope.drawLead(lead: LeadHighlight, textMeasurer: TextMeasurer, 
     seg(r - arm, t, r, t); seg(r, t, r, t + arm)
     seg(r, b - arm, r, b); seg(r, b, r - arm, b)
     seg(l + arm, b, l, b); seg(l, b, l, b - arm)
+    if (!lead.badge) return
     val label = if (lead.critical) "TOO CLOSE · ${lead.label}" else lead.label
     drawBadge(textMeasurer, label, Offset(rect.centerX, t - 8.dp.toPx()), color, centered = true, bold = lead.critical)
 }
@@ -148,6 +198,7 @@ private fun DrawScope.drawDebug(d: DebugLayer, textMeasurer: TextMeasurer) {
     d.egoLaneSource?.let { src ->
         drawBadge(textMeasurer, "ego lane: ${src.name.lowercase()}", Offset(12.dp.toPx(), size.height - 60.dp.toPx()), Cyan, centered = false, bold = false)
     }
+    d.laneStatus?.let { drawBadge(textMeasurer, it, Offset(12.dp.toPx(), size.height - 96.dp.toPx()), Cyan, centered = false, bold = false) }
 }
 
 private fun DrawScope.debugBox(r: ViewRect, tag: String, textMeasurer: TextMeasurer) {

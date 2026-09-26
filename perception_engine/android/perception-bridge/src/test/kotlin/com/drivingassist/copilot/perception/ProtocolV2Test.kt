@@ -244,6 +244,18 @@ class ProtocolV2Test {
     }
 
     @Test
+    fun `navigation packet speed limit decodes, absent or null is unknown`() {
+        val m = assertIs<NavigationPacketMessage>(PerceptionCodec.decode(bundled("navigation_packet_ramp_exit.json").readText()))
+        assertEquals(NavSpeedLimit(35, "osm", "North Avenue Northwest", 123456L, 1790000004000L), m.speedLimit)
+        assertEquals(m, PerceptionCodec.decode(PerceptionCodec.encode(m)), "round trip keeps the speed limit")
+        assertNull(assertIs<NavigationPacketMessage>(PerceptionCodec.decode(bundled("navigation_packet_sim.json").readText())).speedLimit)
+        val nulled = PerceptionCodec.decode("""{"type":"navigation.packet","routeState":{"action":"ARRIVE"},"speedLimit":null}""")
+        assertNull(assertIs<NavigationPacketMessage>(nulled).speedLimit)
+        val minimal = PerceptionCodec.decode("""{"type":"navigation.packet","speedLimit":{"valueMph":45}}""")
+        assertEquals(NavSpeedLimit(45), assertIs<NavigationPacketMessage>(minimal).speedLimit, "source has its default")
+    }
+
+    @Test
     fun `trip state and navigation hint encode like the protocol`() {
         val trip = ClientTripState(1790000000123, GeoPoint(33.7756, -84.3963), 91.2, 6.1, 4.1)
         assertEquals(rawJson.parseToJsonElement(bundled("client_trip_state.json").readText()), rawJson.parseToJsonElement(PerceptionCodec.encodeClient(trip)))

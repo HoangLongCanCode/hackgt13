@@ -79,7 +79,10 @@ data class EgoLane(
             if (lines.size < 2) return null
             val refZ = max(projector.nearestVisibleZ + 1.0, 6.0)
             val refRow = projector.rowAt(refZ)
-            val refX = world.road?.road?.anchor("ego_lane_center_near")?.x ?: projector.cx
+            // The ego anchor sits ~2.6 m ahead: move its lateral offset to refZ before comparing columns, or a lane centre
+            // more than ~1.4 m off the camera axis (mid lane change) lands in the neighbour's pair.
+            val refLat = world.road?.road?.anchor("ego_lane_center_near")?.let { projector.toGround(it.x, it.y)?.x } ?: 0.0
+            val refX = projector.toImage(Ground(refLat, refZ))?.x?.toDouble() ?: projector.cx
             val xs = lines.map { xAtRow(it, refRow) }
             var pair: Pair<Int, Int>? = null
             for (i in 0 until lines.lastIndex) {
