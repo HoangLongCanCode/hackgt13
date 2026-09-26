@@ -95,7 +95,10 @@ class DrivingContextEngine(val config: DrivingContextConfig = DrivingContextConf
         val lead = world.leadVehicle(config.leadMaxDistanceMeters)
         val egoSpeed = navigation?.egoSpeedMps
         val headway = lead?.distanceMeters?.let { d -> egoSpeed?.takeIf { it > 1.0 }?.let { d / it } }
-        val next = if (stale) FollowingState.NORMAL else nextFollowingState(following, lead?.distanceMeters, lead?.ttcSeconds, headway, config.following)
+        val raw = if (stale) FollowingState.NORMAL else nextFollowingState(following, lead?.distanceMeters, lead?.ttcSeconds, headway, config.following)
+        // Optional speed gate: stopped behind a car is close, not closing in (unknown speed never gates).
+        val speedGate = config.criticalMinEgoSpeedMps
+        val next = if (raw == FollowingState.CRITICAL && speedGate != null && egoSpeed != null && egoSpeed < speedGate) FollowingState.CLOSE else raw
         val dText = lead?.distanceMeters?.let { "${fmt1(it)} m" } ?: "--"
         val leadName = lead?.cls?.wire?.uppercase() ?: "VEHICLE"
         if (next != following && !stale) {

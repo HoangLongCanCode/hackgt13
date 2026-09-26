@@ -320,6 +320,8 @@ class PerceptionBridgeTest {
         b.link.await { it.serverReady }
         val ws = serverWs.await()
 
+        // A replayed packet of a sim session (it carries media time) is not this live trip's route.
+        ws.send(navJson("TURN_RIGHT", 28.0, pts = 12.3))
         // Perception says lane 1 of 3; the route says: exit in 400 m from the rightmost lane.
         ws.send(frameJson(0, 0.0, null, "live-nav").replace("\"objects\"", "\"lanes\":{\"currentLane\":1,\"laneCount\":3,\"laneBoundaries\":[],\"confidence\":0.8},\"objects\""))
         ws.send(navJson("EXIT_HIGHWAY", 400.0, requiredLane = "right"))
@@ -374,7 +376,7 @@ class PerceptionBridgeTest {
         // Like the server answering a hello it cannot honour: the error, then a hello of the SAME session.
         ws.send("""{"type":"perception.error","code":"unknownVideo","message":"no clip nope","fatal":false}""")
         ws.send(helloJson("idle", PerceptionMode.SIM, role = "watcher"))
-        ws.send(navJson("GO_STRAIGHT", 10.0)) // processed after the hello on the socket thread
+        ws.send(navJson("GO_STRAIGHT", 10.0, pts = 1.0)) // processed after the hello on the socket thread (sim packets carry pts)
         b.link.await { it.navigationPackets == 1L }
         assertEquals("unknownVideo no clip nope", b.link.await { it.serverError != null }.serverError, "kept: same session")
         ws.send(helloJson("sim-2", PerceptionMode.SIM, role = "controller"))

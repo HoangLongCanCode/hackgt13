@@ -184,6 +184,7 @@ class PerceptionBridge(
     private val decodeErrors = AtomicLong()
     private val simLate = AtomicLong()
     private val navPackets = AtomicLong()
+    private val ignoredNavPackets = AtomicLong()
     private val tripStatesSent = AtomicLong()
     private val captureToResult = RollingWindow(config.statsWindow)
     private val simLead = RollingWindow(config.statsWindow)
@@ -567,6 +568,13 @@ class PerceptionBridge(
     }
 
     private fun onNavigation(msg: NavigationPacketMessage, now: Long) {
+        // The server replays its newest packet to every new client, whatever mode it was made for: sim packets
+        // carry media time, live packets do not. A packet of the other mode would show another trip's route.
+        val m = mode
+        if ((m == PerceptionMode.LIVE && msg.ptsSeconds != null) || (m == PerceptionMode.SIM && msg.ptsSeconds == null)) {
+            ignoredNavPackets.incrementAndGet()
+            return
+        }
         val mapped = NavigationMapper.toNavigationState(msg, config.inferLaneSideFromManeuver)
         synchronized(navLock) {
             val seq = navPackets.incrementAndGet()

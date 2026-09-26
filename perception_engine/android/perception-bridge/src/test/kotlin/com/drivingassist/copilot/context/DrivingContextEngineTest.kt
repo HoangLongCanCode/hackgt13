@@ -72,6 +72,20 @@ class DrivingContextEngineTest {
     }
 
     @Test
+    fun `optional speed gate holds CRITICAL at CLOSE while the ego is stopped`() {
+        val gated = DrivingContextEngine(DrivingContextConfig(criticalMinEgoSpeedMps = 1.5))
+        val model = WorldModel(clockMs = { 0L })
+        fun nav(v: Double?) = NavigationState(Maneuver.FOLLOW_ROAD, 500.0, egoSpeedMps = v)
+        var s = 0L
+        fun at(d: Double, v: Double?) = gated.evaluate(model.update(frame(s, s++ / 10.0, objects = listOf(car(7, d)))), nav(v)).context.following.state
+        assertEquals(FollowingState.CLOSE, at(5.0, 0.0), "stopped behind a car: CLOSE, not TOO CLOSE")
+        assertEquals(FollowingState.CRITICAL, at(5.0, 6.0), "moving: CRITICAL")
+        assertEquals(FollowingState.CRITICAL, at(5.0, null), "unknown speed never gates")
+        assertEquals(FollowingState.CRITICAL, DrivingContextEngine().evaluate(WorldModel(clockMs = { 0L }).update(frame(0, 0.0, objects = listOf(car(7, 5.0)))), nav(0.0)).context.following.state,
+            "off by default")
+    }
+
+    @Test
     fun `red light raises one traffic alert, green after red is spoken`() {
         val events = mutableListOf<DrivingEvent>()
         repeat(3) { events += next { s, p -> frame(s, p, objects = listOf(light(42, LightState.GREEN))) } }

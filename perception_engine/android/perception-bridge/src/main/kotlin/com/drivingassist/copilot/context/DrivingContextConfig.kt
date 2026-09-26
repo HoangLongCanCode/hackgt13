@@ -30,6 +30,13 @@ enum class Units { METRIC, IMPERIAL }
 data class DrivingContextConfig(
     val following: FollowingThresholds = FollowingThresholds(),
     val leadMaxDistanceMeters: Double = 80.0,
+    /**
+     * When set, a CRITICAL following state is held at CLOSE while the ego speed
+     * ([NavigationState.egoSpeedMps], the route's `progress.speedMps`) is known and below this many m/s:
+     * sitting behind a stopped car is close, not closing in. Null (default) = off. An unknown speed
+     * never gates. The thresholds above are not speed-aware on their own.
+     */
+    val criticalMinEgoSpeedMps: Double? = null,
 
     val lightAlertMaxDistanceMeters: Double = 100.0,
     /** No relevant light for this long: the next light is announced again. */
