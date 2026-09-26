@@ -140,6 +140,9 @@ cd perception_engine
 source .venv/Scripts/activate                               # Git Bash on Windows; Linux: source .venv/bin/activate
 python -m perception.realtime.server --mode sim  --nav-session nav/demo_sessions/b1ff4656-0435391e
 python -m perception.realtime.server --mode live --nav-route nav/demo_sessions/b1ff4656-0435391e/route.json
+python -m perception.realtime.server --mode auto --nav-live --nav-provider google   # the tablet sends the destination (client.destination)
+node ../spatial/scripts/test-google-provider.js              # Google provider offline (fake responses)
+node ../spatial/scripts/check-google-key.js "Piedmont Park, Atlanta"   # one real Geocoding + Routes call with spatial/.env
 python -m perception.realtime.nav_relay --nav-session nav/demo_sessions/b1ff4656-0435391e --pts 0 5 10 20   # relay alone
 node nav/make_demo_session.js                               # regenerate the demo sessions (deterministic)
 node nav/make_contract_samples.js                           # regenerate navigation.packet / client.trip_state samples
@@ -314,8 +317,9 @@ adb push b1ff4656-0435391e.mov /sdcard/Android/data/com.drivingassist.spatialcop
    default 700 px at 1280 wide); on a windshield mount it sends focal/sensor size (not `LENS_INTRINSIC_CALIBRATION`).
 10. phase1 behaviours passed through unchanged: `ARRIVE` is announced hundreds of metres early, turn audio is upper-case,
     `START_ROUTE` never appears, no re-routing when `offRoute`, exits and merges carry no side (`turnDirection`
-    `exit` / `merge`), so their arrows do not bend. The Google provider is untested (no key) and uses the legacy
-    Directions API; the demo navigation sessions are synthetic (they do not match the video).
+    `exit` / `merge`), so their arrows do not bend. The Google provider uses the Routes API (falling back to the
+    legacy Directions API) and is tested offline only (fake responses, no key yet); the demo navigation sessions are
+    synthetic (they do not match the video).
 11. The Wi-Fi Tab S9 has no GPS receiver: indoors the fused provider gives a fix every few seconds at 25-100 m, so
     LIVE navigation shows "No new location fix" and holds the route. A real drive needs a GPS source (a phone hotspot
     with location sharing, or a Tab S9 5G). The SIM clip must be pushed into the `sim/` folder the app creates (a folder

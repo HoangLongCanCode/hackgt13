@@ -8,6 +8,7 @@ import com.drivingassist.copilot.context.NavigationState
 import com.drivingassist.copilot.context.WorldModel
 import com.drivingassist.copilot.context.WorldSnapshot
 import com.drivingassist.copilot.context.predictedAt
+import com.drivingassist.copilot.perception.ClientDestination
 import com.drivingassist.copilot.perception.ClientHello
 import com.drivingassist.copilot.perception.ClientPing
 import com.drivingassist.copilot.perception.ClientPlayback
@@ -356,6 +357,19 @@ class PerceptionBridge(
         val ok = ws.send(PerceptionCodec.encodeClient(trip))
         if (ok) tripStatesSent.incrementAndGet()
         return ok
+    }
+
+    /**
+     * Live navigation: where to go (a place or address, at most 200 characters). The laptop resolves it with its
+     * phase1 provider and builds the route from the next GPS fix. Returns false when it could not be sent (not
+     * connected, taken over, blank). Not re-sent on reconnect: the server keeps the destination.
+     */
+    fun sendDestination(query: String): Boolean {
+        val q = query.trim().take(ClientDestination.MAX_LENGTH)
+        if (q.isEmpty()) return false
+        val ws = socket ?: return false
+        if (closed || takenOver) return false
+        return ws.send(PerceptionCodec.encodeClient(ClientDestination(q)))
     }
 
     /** [headingDegrees] / [speedMps] null (no bearing / speed in the fix) are sent as 0, as PROTOCOL_v2 asks. */

@@ -1,3 +1,5 @@
+const { encodePolyline } = require('../polylines');
+
 function hashString(value) {
   let hash = 0;
   for (let index = 0; index < value.length; index += 1) {
@@ -40,7 +42,8 @@ function fetchRoute(origin, destination, config = {}) {
     routeApiVersion: 'mock-v1',
     origin,
     destination,
-    polyline: '',
+    // Encoded like a real provider's route, so displays (the tablet's route map) need no special case.
+    polyline: encodePolyline(geometry),
     geometry,
     steps: [
       {

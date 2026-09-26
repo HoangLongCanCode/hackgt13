@@ -124,6 +124,17 @@ The phase1 Node.js navigation engine computes `SpatialNavigationPacket`s. It is 
 { "type": "client.trip_state", "timestampMs": 1790000000123, "location": { "lat": 33.7756, "lng": -84.3963 }, "heading": 91.2, "speedMps": 6.1, "accuracyMeters": 4.1 }
 ```
 
+### `client.destination` (live; when the user picks where to go)
+```json
+{ "type": "client.destination", "query": "Piedmont Park, Atlanta" }
+```
+A free-text place or address (1-200 characters). The server's phase1 provider (`--nav-provider mock|google`; Google =
+Geocoding API + Routes API) resolves it and builds the route from the next `client.trip_state` position; until then no
+packets change. `perception.hello` `navigation.destination` echoes the current target. Same sender rule as
+`client.trip_state`; without live navigation (`--nav-live`, `--nav-destination` or `--nav-route`) the answer is one
+`perception.error modeNotAvailable`. The Kotlin app sends it when the destination in its settings differs from the
+hello's.
+
 ### `navigation.packet` (server → client; sim: for the current playback position, ~2 Hz; live: after each `client.trip_state`)
 ```json
 { "type": "navigation.packet", "schemaVersion": 2, "serverTimeMs": 1790000000000,

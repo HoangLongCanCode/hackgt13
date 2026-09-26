@@ -86,6 +86,8 @@ object StatusModel {
 
         // Navigation health (phase1 on the laptop, fed by GPS in LIVE and by media time in SIM).
         val navLine = when {
+            k.serverNavigationError?.contains("waiting for a destination") == true ->
+                if (settings.destination.isBlank()) "Live navigation is on: set a destination (tap the chip)." else "Sending the destination to the laptop..."
             k.serverNavigationAvailable == false || k.serverNavigationMode == "off" ->
                 "Route unavailable" + (k.serverNavigationError?.let { ": ${it.take(60)}" } ?: " (laptop runs no navigation)")
             route == null -> null
@@ -105,6 +107,7 @@ object StatusModel {
             lines += "sim lead p50 ${k.simLeadMsP50?.let(::f0) ?: "-"} ms · late ${k.simLateResults} · buffered ${k.simBuffered} · pts ${k.playbackPts?.let(::f1) ?: "-"}"
         }
         lines += "nav ${k.serverNavigationMode ?: "?"} packets ${k.navigationPackets} age ${k.navigationAgeMs?.let { f0(it) + " ms" } ?: "-"} provider ${route?.provider ?: "-"}"
+        session.bridge?.serverHello?.value?.navigationDestination?.let { lines += "destination on laptop: $it" }
         if (mode == SourceMode.LIVE) {
             val fix = session.gps.value
             lines += "gps ${fix?.provider ?: "-"} ±${fix?.accuracyMeters?.let(::f0) ?: "-"} m · age ${fix?.let { (nowMs - it.receivedAtMs) / 1000 }?.toString() ?: "-"} s · sent ${k.tripStatesSent}"

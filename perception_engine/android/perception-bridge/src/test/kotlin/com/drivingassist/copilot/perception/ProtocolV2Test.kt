@@ -170,6 +170,8 @@ class ProtocolV2Test {
         val pb = ClientPlayback("b1ff4656-0435391e", 12.345, true, 1.0, 123456789012)
         assertEquals(rawJson.parseToJsonElement(bundled("client_playback.json").readText()), rawJson.parseToJsonElement(PerceptionCodec.encodeClient(pb)))
         assertEquals("""{"type":"client.ping","clientTimeNs":123456789012}""", PerceptionCodec.encodeClient(ClientPing(123456789012)))
+        assertEquals("""{"type":"client.destination","query":"Piedmont Park, Atlanta"}""",
+            PerceptionCodec.encodeClient(ClientDestination("Piedmont Park, Atlanta")))
     }
 
     // ---------------------------------------------------------------------------- navigation

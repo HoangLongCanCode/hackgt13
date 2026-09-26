@@ -45,6 +45,12 @@ data class RouteGuide(
     val routeKey: String = "",
     /** Identifies the active maneuver of the route (phase1 activeManeuver.eventId): each prompt stage once per key. */
     val eventKey: String = "",
+    /** phase1 `route.polyline` (Google's overview polyline, or the mock provider's): the mini-map's route line. */
+    val polyline: String? = null,
+    /** phase1 `progress.currentLocation`: the car's position the packet was computed for. */
+    val carLocation: LatLng? = null,
+    /** phase1 `progress.heading` (degrees from north; 0 also means unknown). */
+    val headingDegrees: Double? = null,
 ) {
     val isArrival: Boolean get() = maneuver == Maneuver.ARRIVE
 
@@ -108,6 +114,13 @@ data class RouteGuide(
                 receivedAtNs = u.receivedAtNs,
                 routeKey = routeKey,
                 eventKey = "$routeKey/$eventId",
+                polyline = packet.obj("route").str("polyline"),
+                carLocation = progress.obj("currentLocation").let { c ->
+                    val lat = c.num("lat")
+                    val lng = c.num("lng")
+                    if (lat != null && lng != null) LatLng(lat, lng) else null
+                },
+                headingDegrees = progress.num("heading"),
             )
         }
 

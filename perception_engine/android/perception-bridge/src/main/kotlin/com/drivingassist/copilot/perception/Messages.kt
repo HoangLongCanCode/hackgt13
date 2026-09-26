@@ -95,6 +95,9 @@ data class HelloMessage(
     /** `navigation.error`, e.g. why the relay failed to start. */
     val navigationError: String? get() = navField("error")?.takeIf { it.isString }?.content
 
+    /** Live navigation target the laptop builds the route for (`navigation.destination`), null in sim / before one. */
+    val navigationDestination: String? get() = navField("destination")?.takeIf { it.isString }?.content
+
     private fun navField(key: String): JsonPrimitive? = ((navigation as? JsonObject)?.get(key)) as? JsonPrimitive
 
     /** True when this server takes v2 `SDC1` camera frames (a v1 server's 8-byte uplink is not compatible). */

@@ -63,8 +63,9 @@ class CopilotViewModel(app: Application) : AndroidViewModel(app) {
         if (sessionKey(next) != sessionKey(previous)) {
             _session.value.close()
             _session.value = newSession(next)
-        } else if (next.voice != previous.voice) {
-            voice.attach(_session.value, next)
+        } else {
+            if (next.voice != previous.voice) voice.attach(_session.value, next)
+            if (next.destination != previous.destination) _session.value.setDestination(next.destination)
         }
     }
 

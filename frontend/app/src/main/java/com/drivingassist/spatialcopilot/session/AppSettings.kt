@@ -52,6 +52,11 @@ data class AppSettings(
      * recording dash cam's geometry, so no lens intrinsics are sent. Off = windshield mount: send this lens.
      */
     val cameraOnMonitor: Boolean = true,
+    /**
+     * LIVE navigation target, a place or address ("Piedmont Park, Atlanta"). Sent to the laptop, whose phase1 provider
+     * (mock or Google) builds the route from this tablet's GPS. Blank = the laptop's own --nav-destination.
+     */
+    val destination: String = "",
 ) {
     fun save(context: Context) {
         prefs(context).edit()
@@ -63,6 +68,7 @@ data class AppSettings(
             .putBoolean(KEY_VOICE, voice)
             .putBoolean(KEY_SPEED_GATE, gateCriticalBySpeed)
             .putBoolean(KEY_MONITOR, cameraOnMonitor)
+            .putString(KEY_DESTINATION, destination)
             .apply()
     }
 
@@ -74,6 +80,7 @@ data class AppSettings(
         const val EXTRA_URL = "perception.url"
         const val EXTRA_VIDEO = "perception.video"
         const val EXTRA_DEBUG = "perception.debug"
+        const val EXTRA_DESTINATION = "perception.destination"
 
         private const val PREFS = "spatial_copilot"
         private const val KEY_MODE = "mode"
@@ -84,6 +91,7 @@ data class AppSettings(
         private const val KEY_VOICE = "voice"
         private const val KEY_SPEED_GATE = "gate_critical_by_speed"
         private const val KEY_MONITOR = "camera_on_monitor"
+        private const val KEY_DESTINATION = "destination"
 
         private fun prefs(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
@@ -108,6 +116,7 @@ data class AppSettings(
                 voice = p.getBoolean(KEY_VOICE, true),
                 gateCriticalBySpeed = p.getBoolean(KEY_SPEED_GATE, false),
                 cameraOnMonitor = p.getBoolean(KEY_MONITOR, true),
+                destination = p.getString(KEY_DESTINATION, null).orEmpty(),
             )
         }
 
@@ -119,6 +128,7 @@ data class AppSettings(
             extras.getString(EXTRA_URL)?.trim()?.takeIf(::isValidUrl)?.let { s = s.copy(serverUrl = it) }
             extras.getString(EXTRA_VIDEO)?.trim()?.takeIf { it.isNotEmpty() }?.let { s = s.copy(simVideoId = it) }
             if (extras.containsKey(EXTRA_DEBUG)) s = s.copy(debug = extras.getBoolean(EXTRA_DEBUG))
+            extras.getString(EXTRA_DESTINATION)?.trim()?.let { s = s.copy(destination = it.take(200)) }
             return s
         }
     }

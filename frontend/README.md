@@ -90,6 +90,28 @@ LIVE asks for the camera and location. On the Wi-Fi Tab S9 (no GPS chip) the fus
 indoors a fix comes every few seconds at 25-100 m, the banner says so and the route is held. For SIM, push the clip after
 the app has run once (it creates `files/sim/` itself; a folder made with `adb shell mkdir` is not readable by the app).
 
+## API keys (laptop only, never in the app)
+
+| Key | File | Used by |
+|---|---|---|
+| `GOOGLE_MAPS_API_KEY` (Geocoding API + Routes API enabled) | `spatial/.env` (template `spatial/.env.example`) | phase1's Google provider, run by the perception server's relay |
+| `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID` | `perception_engine/.env` (template `perception_engine/.env.example`) | the perception server's `POST /tts` proxy |
+
+Both files are gitignored and stay on the laptop; the tablet only talks to the laptop. The route map on the tablet is
+drawn from the route line phase1 sends, so the app needs no Maps SDK key.
+
+## Navigation with Google Maps and GPS
+
+1. Put the key in `spatial/.env` and check it: `node spatial/scripts/check-google-key.js "Piedmont Park, Atlanta"`.
+2. Start the server with live navigation: `... -m perception.realtime.server --mode auto --nav-live --nav-provider google`
+   (`--nav-provider mock` works without a key).
+3. On the tablet, LIVE mode, tap the chip and type a **Destination**. The app sends it (`client.destination`); the
+   laptop geocodes it and builds the Google route from the tablet's next GPS fix (`client.trip_state`, 1 Hz), then
+   sends `navigation.packet`s: the maneuver card, the road arrows, the voice prompts and the route map (bottom right,
+   heading-up, 300 m) follow them.
+   Or at launch (the whole command in one pair of quotes, the place in inner quotes, or `adb shell` splits it at the spaces):
+   `adb shell "am start -S -n com.drivingassist.spatialcopilot/.MainActivity --es perception.source live --es perception.destination 'Piedmont Park, Atlanta'"`.
+
 ## Voice
 
 Driving events and the route go through the deterministic cue rules of `../perception_engine/docs/audio/` (the catalog

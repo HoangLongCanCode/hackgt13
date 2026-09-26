@@ -7,6 +7,8 @@
   "scripts": {
     "demo:phase1": "node scripts/run-phase1-demo.js",
     "pull:android": "node scripts/pull-android-capture.js",
-    "process:captured": "node scripts/process-captured-session.js"
+    "process:captured": "node scripts/process-captured-session.js",
+    "test": "node scripts/test-google-provider.js",
+    "check:google": "node scripts/check-google-key.js"
   }
 }

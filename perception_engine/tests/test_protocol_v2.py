@@ -264,6 +264,9 @@ def t_nav_worker_offline() -> str:
         def broadcast_error(self, code, msg):
             raise AssertionError(f"relay error {code}: {msg}")
 
+        def broadcast_hello(self, *_):
+            pass
+
         def media_pts_now(self):
             pts["t"] += 0.1
             return pts["t"]
@@ -294,8 +297,29 @@ def t_nav_worker_offline() -> str:
     w.join(2)
     check(len(got) == 1 and got[0]["ptsSeconds"] is None and got[0]["tripTimestampMs"] == 1790000000123,
           f"live packet {got[:1]}")
+    # --nav-live: no destination until the tablet sends client.destination; then the route follows the next fix.
+    got.clear()
+    w = NavWorker(Srv(), FakeNavRelay, SimpleNamespace(nav_session=None, nav_live=True, **base))
+    w.start()
+    time.sleep(0.2)
+    check(w.info()["available"] is False and "waiting for a destination" in (w.info()["error"] or ""), f"waiting {w.info()}")
+    w.set_destination("Piedmont Park")
+    t0 = time.time()
+    while ("start_live", "Piedmont Park") not in FakeNavRelay.calls and time.time() - t0 < 3:
+        time.sleep(0.05)
+    w.submit_trip({"timestampMs": 1790000000456, "location": {"lat": 33.77, "lng": -84.39}, "heading": 0.0,
+                   "speedMps": 0.0}, "c1")
+    t0 = time.time()
+    while not got and time.time() - t0 < 3:
+        time.sleep(0.05)
+    info = w.info()
+    w.stop()
+    w.join(2)
+    check(("start_live", "Piedmont Park") in FakeNavRelay.calls, "client.destination restarted live navigation")
+    check(len(got) == 1 and info["available"] and info["destination"] == "Piedmont Park" and info["error"] is None,
+          f"destination packet {info}")
     threads = {c for c in FakeNavRelay.calls}
-    return f"sim {len(ptss)} packets, live 1 packet, relay calls {len(threads)}"
+    return f"sim {len(ptss)} packets, live 1 packet, tablet destination ok, relay calls {len(threads)}"
 
 
 def t_nav_failures_and_trip_checks() -> str:

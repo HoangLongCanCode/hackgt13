@@ -5,6 +5,16 @@ import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
+import com.drivingassist.spatialcopilot.nav.RouteMap
+import com.drivingassist.spatialcopilot.nav.MapPoint
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
@@ -172,6 +182,9 @@ private fun Chrome(
             if (settings.debug) DebugPanel(status.debugLines)
         }
         route?.let { ManeuverCard(it, session.routeDistanceNow(it), Modifier.align(Alignment.TopEnd)) }
+        route?.takeIf { !it.stale && !it.polyline.isNullOrEmpty() && it.carLocation != null }?.let {
+            RouteMapCard(it, Modifier.align(Alignment.BottomEnd))
+        }
         status.banner?.let { Banner(it, Modifier.align(Alignment.TopCenter).padding(top = 4.dp)) }
         alertText(context, session.bridge?.world?.value)?.let { (text, critical) -> AlertPill(text, critical, Modifier.align(Alignment.BottomCenter)) }
         if (cameraMissing) {
@@ -308,6 +321,58 @@ private fun ManeuverCard(route: RouteGuide, distanceNow: Double?, modifier: Modi
     }
 }
 
+/**
+ * Heading-up route map (bottom right): phase1's route polyline around the car's matched position. Only the route line,
+ * no map tiles, so no Maps SDK key is needed in the app.
+ */
+@Composable
+private fun RouteMapCard(route: RouteGuide, modifier: Modifier = Modifier) {
+    val car = route.carLocation ?: return
+    val points = remember(route.polyline) { RouteMap.decode(route.polyline.orEmpty()) }
+    if (points.size < 2) return
+    val heading = route.headingDegrees?.takeIf { it > 0.0 } ?: RouteMap.routeHeadingNear(points, car) ?: 0.0
+    val projected = RouteMap.project(points, car, heading)
+    val destination = projected.last()
+    Box(
+        modifier
+            .padding(bottom = 4.dp)
+            .size(width = 240.dp, height = 170.dp)
+            .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(16.dp))
+            .border(1.dp, Mint.copy(alpha = 0.5f), RoundedCornerShape(16.dp)),
+    ) {
+        Canvas(Modifier.fillMaxSize().padding(8.dp)) {
+            val metresPerPx = RANGE_M / (size.height * 0.75f)
+            val originX = size.width / 2f
+            val originY = size.height * 0.78f
+            fun at(p: MapPoint) = Offset(originX + (p.right / metresPerPx).toFloat(), originY - (p.up / metresPerPx).toFloat())
+            clipRect {
+                val path = Path().apply {
+                    projected.forEachIndexed { i, p -> val o = at(p); if (i == 0) moveTo(o.x, o.y) else lineTo(o.x, o.y) }
+                }
+                drawPath(path, Color.Black.copy(alpha = 0.6f), style = Stroke(width = 9.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
+                drawPath(path, Mint, style = Stroke(width = 5.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
+                drawCircle(Color.White, radius = 5.dp.toPx(), center = at(destination))
+                drawCircle(Mint, radius = 3.dp.toPx(), center = at(destination))
+            }
+            // The car: a chevron pointing up (heading-up map).
+            val c = Offset(originX, originY)
+            val r = 9.dp.toPx()
+            val carShape = Path().apply {
+                moveTo(c.x, c.y - r); lineTo(c.x + r * 0.75f, c.y + r * 0.7f); lineTo(c.x, c.y + r * 0.3f); lineTo(c.x - r * 0.75f, c.y + r * 0.7f); close()
+            }
+            drawPath(carShape, Color.White)
+        }
+        Text(
+            text = "${RANGE_M.toInt()} m · ${route.provider ?: "route"}",
+            color = Color.White.copy(alpha = 0.7f),
+            fontSize = 10.sp,
+            modifier = Modifier.align(Alignment.TopStart).padding(horizontal = 10.dp, vertical = 6.dp),
+        )
+    }
+}
+
+private const val RANGE_M = 300.0
+
 @Composable
 private fun SettingsDialog(
     initial: AppSettings,
@@ -318,6 +383,7 @@ private fun SettingsDialog(
     var draft by remember(initial) { mutableStateOf(initial) }
     var url by remember(initial) { mutableStateOf(initial.serverUrl) }
     var video by remember(initial) { mutableStateOf(initial.simVideoId) }
+    var destination by remember(initial) { mutableStateOf(initial.destination) }
     var error by remember { mutableStateOf<String?>(null) }
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -339,6 +405,17 @@ private fun SettingsDialog(
                 )
                 OutlinedTextField(value = url, onValueChange = { url = it }, singleLine = true, modifier = Modifier.fillMaxWidth(), label = { Text("Laptop WebSocket URL") })
                 Text("USB: adb reverse tcp:8765 tcp:8765, then 127.0.0.1. Wi-Fi: the laptop's LAN address.", fontSize = 12.sp)
+                if (draft.mode == SourceMode.LIVE) {
+                    OutlinedTextField(
+                        value = destination,
+                        onValueChange = { destination = it.take(200) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Destination (live navigation)") },
+                        placeholder = { Text("e.g. Piedmont Park, Atlanta") },
+                    )
+                    Text("The laptop routes there from this tablet's GPS (Google Maps with a key in spatial/.env, else the mock route).", fontSize = 12.sp)
+                }
                 if (draft.mode == SourceMode.SIM) {
                     OutlinedTextField(value = video, onValueChange = { video = it }, singleLine = true, modifier = Modifier.fillMaxWidth(), label = { Text("Sim clip id") })
                     onSimToggle?.let { TextButton(onClick = it) { Text("Play / pause clip") } }
@@ -356,7 +433,7 @@ private fun SettingsDialog(
             TextButton(onClick = {
                 val u = url.trim()
                 if (!AppSettings.isValidUrl(u)) { error = "Use a ws:// or wss:// URL"; return@TextButton }
-                onApply(draft.copy(serverUrl = u, simVideoId = video.trim().ifEmpty { AppSettings.DEFAULT_VIDEO }))
+                onApply(draft.copy(serverUrl = u, simVideoId = video.trim().ifEmpty { AppSettings.DEFAULT_VIDEO }, destination = destination.trim()))
             }) { Text("Apply") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },

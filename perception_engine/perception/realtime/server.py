@@ -608,9 +608,19 @@ class NavWorker(threading.Thread):
         self.packets = 0
         self.failures = 0                    # consecutive relay calls without a packet
         self.last_ms: Optional[float] = None
+        self.destination: Optional[str] = getattr(a, "nav_destination", None)  # live: current target query
+        self.pending_destination: Optional[str] = None   # live: set by client.destination, applied in run()
 
     def info(self) -> dict[str, Any]:
-        return {"mode": self.mode, "available": self.available, "error": self.error}
+        return {"mode": self.mode, "available": self.available, "error": self.error,
+                "destination": self.destination if self.mode == "live" else None}
+
+    def set_destination(self, query: str) -> None:
+        """Live: a new target from the tablet. The relay restarts live navigation with it (in run()); the route is
+        built by the phase1 provider (mock or Google) from the next client.trip_state position."""
+        with self.cond:
+            self.pending_destination = query
+            self.cond.notify()
 
     def submit_trip(self, sample: dict[str, Any], client_key: Optional[str]) -> None:
         with self.cond:
@@ -651,6 +661,22 @@ class NavWorker(threading.Thread):
             print(f"[nav] relay still failing ({self.failures} calls): {why}", flush=True)
         return None
 
+    def _apply_destination(self, query: str) -> None:
+        try:
+            self.relay.start_live(destination=query, provider=self.a.nav_provider)
+        except Exception as e:
+            self.available = False
+            self.error = f"destination {query!r} not usable: {type(e).__name__}: {e}"
+            print(f"[nav] {self.error}", flush=True)
+            self.srv.post(self.srv.broadcast_error, "internal", self.error)
+            self.srv.post(self.srv.broadcast_hello, False)
+            return
+        self.destination = query
+        self.error = None
+        self.failures = 0
+        print(f"[nav] destination {query!r} ({self.a.nav_provider}); route from the next client.trip_state", flush=True)
+        self.srv.post(self.srv.broadcast_hello, False)
+
     def _publish(self, pkt: dict[str, Any]) -> None:
         self.packets += 1
         self.srv.post(self.srv.broadcast_nav, dumps(pkt).decode())
@@ -660,14 +686,17 @@ class NavWorker(threading.Thread):
         try:
             kw = {"phase1_dir": a.phase1_dir} if a.phase1_dir else {}
             self.relay = self.relay_cls(node_exe=a.node, **kw)
+            # --nav-live without --nav-route / --nav-destination: wait for the tablet's client.destination.
+            waiting = self.mode == "live" and not (a.nav_route or a.nav_destination)
             if self.mode == "sim":
                 self.relay.start_sim(str(a.nav_session))
-            else:
+            elif not waiting:
                 self.relay.start_live(route_json=a.nav_route, origin=a.nav_origin, destination=a.nav_destination,
                                       provider=a.nav_provider)
-            self.running = self.available = True
-            self.error = None
-            print(f"[nav] relay running ({self.mode})", flush=True)
+            self.running = True
+            self.available = not waiting
+            self.error = 'waiting for a destination (client.destination from the tablet)' if waiting else None
+            print(f"[nav] relay running ({self.mode}{', ' + self.error if waiting else ''})", flush=True)
         except Exception as e:
             self.error = f"{type(e).__name__}: {e}"
             print(f"[nav] relay not available: {self.error}", flush=True)
@@ -676,10 +705,13 @@ class NavWorker(threading.Thread):
         try:
             while not self.stop_evt.is_set():
                 with self.cond:
-                    if not self.trips:
+                    if not self.trips and self.pending_destination is None:
                         self.cond.wait(0.1)
                     trips = list(self.trips)
                     self.trips.clear()
+                    dest, self.pending_destination = self.pending_destination, None
+                if dest is not None and self.mode == "live":
+                    self._apply_destination(dest)
                 for sample, _key in trips:
                     pkt = self._call(self.relay.on_trip_state, sample)
                     if pkt is not None:
@@ -1133,6 +1165,8 @@ class Server:
             c.offer_ctrl(dumps(make_pong(cts if isinstance(cts, int) else None)).decode())
         elif t == "client.trip_state":
             self.on_trip_state(c, msg)
+        elif t == "client.destination":
+            self.on_destination(c, msg)
         else:
             c.error("badMessage", f"unknown message type {t!r}", detail={"type": t})
 
@@ -1241,6 +1275,25 @@ class Server:
             elif not num(body[k]):
                 return None, f"{k} must be a number (0 when unknown)"
         return body, None
+
+    def on_destination(self, c: Client, msg: dict[str, Any]) -> None:
+        """Live navigation target typed on the tablet (a place or address; the phase1 provider geocodes it). Same
+        sender rule as client.trip_state."""
+        if self.nav is None or not self.nav.running or self.nav.mode != "live":
+            c.error("modeNotAvailable", "client.destination ignored: live navigation is not running (start the server "
+                                        "with --nav-live, --nav-destination or --nav-route)", min_interval_s=0)
+            return
+        hint = (c.hello or {}).get("navigation")
+        if self.session.controller != c.key and not (isinstance(hint, dict) and hint.get("mode") == "live"):
+            c.error("notUplinkClient", "client.destination ignored: only the session controller (or a client whose "
+                                       "client.hello has navigation.mode 'live') sets the destination")
+            return
+        q = msg.get("query")
+        if not isinstance(q, str) or not q.strip() or len(q) > 200:
+            c.error("badMessage", "client.destination ignored: query must be a non-empty string of at most 200 "
+                                  "characters", detail={"type": "client.destination"})
+            return
+        self.nav.set_destination(q.strip())
 
     def on_trip_state(self, c: Client, msg: dict[str, Any]) -> None:
         """Live navigation input. Only the session controller (or a client whose hello asked for live navigation)
@@ -1369,7 +1422,7 @@ class Server:
             if not self.a.start_on_connect:
                 self.start_evt.set()
             self.video_src.start()
-        if self.a.nav_session or self.a.nav_route or self.a.nav_destination:
+        if self.a.nav_session or self.a.nav_route or self.a.nav_destination or getattr(self.a, "nav_live", False):
             cls, err = load_nav_relay_class(self.a.nav_relay_impl)
             if cls is None:
                 self.nav_unavailable = f"perception.realtime.nav_relay not importable: {err}"
@@ -1503,6 +1556,9 @@ def build_parser() -> argparse.ArgumentParser:
     nav = ap.add_argument_group("navigation (optional; phase1 route engine via perception.realtime.nav_relay)")
     nav.add_argument("--nav-session", default=None, help="phase1 session folder (sim/video: timeline by media pts)")
     nav.add_argument("--nav-route", default=None, help="live: route.json to follow")
+    nav.add_argument("--nav-live", action="store_true",
+                     help="live navigation with the destination typed on the tablet (client.destination); "
+                          "--nav-destination sets a default")
     nav.add_argument("--nav-destination", default=None, help="live: destination query")
     nav.add_argument("--nav-origin", default=None, help="live: origin query (default: first trip_state)")
     nav.add_argument("--nav-provider", default="mock", choices=["mock", "google"])
@@ -1563,7 +1619,7 @@ def main(argv: Optional[list[str]] = None) -> None:
     for ip in lan_ips():
         print(f"  LAN (Wi-Fi) : ws://{ip}:{a.port}/perception")
     print(f"  USB (adb)   : adb reverse tcp:{a.port} tcp:{a.port}   then ws://127.0.0.1:{a.port}/perception")
-    if a.nav_session or a.nav_route or a.nav_destination:
+    if a.nav_session or a.nav_route or a.nav_destination or a.nav_live:
         print("  navigation  : " + (f"sim session {a.nav_session}" if a.nav_session else
                                     f"live ({a.nav_provider}) route={a.nav_route} dest={a.nav_destination}"))
     if a.tts_allow_lan:

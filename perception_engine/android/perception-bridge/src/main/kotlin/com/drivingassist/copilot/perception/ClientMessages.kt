@@ -113,6 +113,20 @@ data class ClientPing(val clientTimeNs: Long) : ClientMessage {
     }
 }
 
+/**
+ * `client.destination` (live navigation): where to go, as typed by the user (a place or address). The laptop's
+ * phase1 provider (mock or Google Geocoding + Routes) resolves it and builds the route from the next
+ * `client.trip_state`; `perception.hello` `navigation.destination` echoes the current target.
+ */
+@Serializable
+@SerialName(ClientDestination.TYPE)
+data class ClientDestination(val query: String) : ClientMessage {
+    companion object {
+        const val TYPE = "client.destination"
+        const val MAX_LENGTH = 200
+    }
+}
+
 /** `[lat, lng]` in degrees (WGS84), phase1 `GeoCoordinate`. */
 @Serializable
 data class GeoPoint(val lat: Double, val lng: Double)

@@ -115,6 +115,18 @@ class CopilotSession(context: Context, val settings: AppSettings) : AutoCloseabl
             SourceMode.DEMO -> scope.launch { demoLoop() }
         }
         bridge?.let { b -> scope.launch { b.navigation.collect { _route.value = RouteGuide.from(it) } } }
+        if (settings.mode == SourceMode.LIVE) bridge?.let { b ->
+            // Tell the laptop where to go when its live target differs from ours (it keeps it across reconnects).
+            scope.launch {
+                kotlinx.coroutines.flow.combine(b.serverHello, destination) { hello, want -> hello to want }.collect { (hello, want) ->
+                    val dest = want.trim()
+                    if (hello == null || dest.isEmpty() || hello.navigationMode != "live" || hello.isWatcher) return@collect
+                    if (hello.navigationDestination != dest && lastSentDestination != dest && b.sendDestination(dest)) {
+                        lastSentDestination = dest
+                    }
+                }
+            }
+        }
     }
 
     /**
@@ -156,6 +168,15 @@ class CopilotSession(context: Context, val settings: AppSettings) : AutoCloseabl
         locationJob = null
         runCatching { location?.stop() }
         location = null
+    }
+
+    private val destination = MutableStateFlow(settings.destination)
+    @Volatile private var lastSentDestination: String? = null
+
+    /** LIVE: a new navigation target from the settings (sent when the laptop's differs). */
+    fun setDestination(query: String) {
+        lastSentDestination = null
+        destination.value = query
     }
 
     /** Camera bind failures and the like (null clears). */

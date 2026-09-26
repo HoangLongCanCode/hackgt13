@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hackgt13.local/contracts/schemas/client.destination.schema.json",
+  "title": "client.destination (protocol v2)",
+  "description": "Client -> server live-navigation target typed on the tablet (PROTOCOL_v2.md, Navigation). The server's phase1 provider (mock or Google Geocoding + Routes) resolves the query and builds the route from the next client.trip_state position; perception.hello navigation.destination echoes the current target. Same sender rule as client.trip_state.",
+  "type": "object",
+  "required": [
+    "type",
+    "query"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "type": {
+      "const": "client.destination"
+    },
+    "query": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "description": "Free-text place or address, e.g. \"Piedmont Park, Atlanta\"."
+    }
+  }
+}
