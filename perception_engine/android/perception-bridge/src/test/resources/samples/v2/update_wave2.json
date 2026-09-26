@@ -1,0 +1,7 @@
+{ "type": "perception.update", "schemaVersion": 2, "wave": 2,
+  "seq": 4711, "frameIndex": 301, "ptsSeconds": 10.03, "echo": { "frameId": 1234, "captureTimeNs": 123 } ,
+  "serverTimeMs": 1790000000000, "processingMs": 61.2,
+  "distances": [ { "id": 17, "distanceMeters": 18.4, "distanceMethod": "fused", "distanceConfidence": 0.8, "lateralMeters": -0.3 } ],
+  "lanes": { "currentLane": 2, "laneCount": 3, "laneBoundaries": [[[300.0, 540.0], [455.0, 300.0]]], "confidence": 0.7 },
+  "road": { "drivableCoverage": 0.31, "egoPathPolygon": [[300.0, 540.0], [455.0, 300.0], [505.0, 300.0], [660.0, 540.0]], "horizonY": 262.0, "vanishingPoint": [640, 262], "anchorPoints": [] },
+  "signs": [], "blocks": ["depth", "lanes"], "timingsMs": { "depth": 44.1, "lanes": 14.9 } }

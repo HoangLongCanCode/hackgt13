@@ -1,0 +1,165 @@
+{
+  "type": "perception.hello",
+  "protocolVersion": 2,
+  "schemaVersion": 2,
+  "sessionId": "live-ws-probe-20260926T082610-991741",
+  "serverTimeMs": 1790429170054,
+  "mode": "live",
+  "acceptedModes": [
+    "live",
+    "sim"
+  ],
+  "source": {
+    "kind": "camera",
+    "id": "ws-probe"
+  },
+  "sourceFps": null,
+  "targetHz": 16.0,
+  "image": {
+    "width": 960,
+    "height": 540
+  },
+  "camera": {
+    "focalPx": 525.0,
+    "principalPoint": [
+      480.0,
+      270.0
+    ],
+    "horizonY": null,
+    "cameraHeightMeters": 1.3
+  },
+  "classes": [
+    "pedestrian",
+    "rider",
+    "car",
+    "truck",
+    "bus",
+    "train",
+    "motorcycle",
+    "bicycle",
+    "traffic light",
+    "traffic sign"
+  ],
+  "staticIdOffset": 1000000,
+  "uplink": {
+    "maxInFlight": 2,
+    "preferredWidth": 960,
+    "preferredHeight": 540,
+    "jpegQuality": 80,
+    "header": "SDC1"
+  },
+  "sim": {
+    "lookaheadSeconds": 0.35,
+    "lookaheadMode": "auto",
+    "videos": [
+      "b1d968b9-ce42734f",
+      "b1f4491b-cf446195",
+      "b1ff4656-0435391e",
+      "b204a5c1-064b0040",
+      "b2064e61-2beadd45",
+      "b20e291a-6012d836",
+      "b23adb0d-8a7aaced",
+      "b23d2079-0c019d8e",
+      "b780088d-0bf9e946",
+      "b9ecc316-529acd3c",
+      "bc07d865-f526e4d9",
+      "bf1af616-e750e7dd",
+      "c38cd3f6-c74ca48b"
+    ],
+    "videoId": null
+  },
+  "schedule": {
+    "detection": {
+      "lane": "fast",
+      "every": 1,
+      "phase": 0
+    },
+    "tracking": {
+      "lane": "fast",
+      "every": 1,
+      "phase": 0
+    },
+    "lights": {
+      "lane": "fast",
+      "every": 1,
+      "phase": 0
+    },
+    "geometryDistance": {
+      "lane": "fast",
+      "every": 1,
+      "phase": 0
+    },
+    "distance": {
+      "lane": "slow",
+      "every": 1,
+      "phase": 0
+    },
+    "depth": {
+      "lane": "slow",
+      "every": 1,
+      "phase": 0
+    },
+    "lanes": {
+      "lane": "slow",
+      "every": 1,
+      "phase": 0
+    },
+    "signs": {
+      "lane": "slow",
+      "every": 2,
+      "phase": 1
+    }
+  },
+  "models": [
+    {
+      "block": "detection",
+      "name": "bdd-yolo26s",
+      "detail": "imgsz 960, conf 0.25",
+      "licence": "AGPL-3.0 (Ultralytics) + BDD100K non-commercial data terms: research/demo only"
+    },
+    {
+      "block": "tracking",
+      "name": "ul_botsort",
+      "detail": "+ ul_bytetrack for lights/signs (ids >= 1000000)",
+      "licence": "AGPL-3.0 (Ultralytics trackers)"
+    },
+    {
+      "block": "depth",
+      "name": "da3_metric_large",
+      "detail": "fused depth-model + flat-ground + size prior, per-track Kalman",
+      "licence": "Apache-2.0 weights, but trained on Waymo Open (terms bar vehicle-assist use)"
+    },
+    {
+      "block": "lanes",
+      "name": "twinlitenetplus_large",
+      "detail": "temporal=True",
+      "licence": "BDD100K-trained weights: research/non-commercial only"
+    },
+    {
+      "block": "lights",
+      "name": "autoware_onnx",
+      "detail": "smoothing hmm, orient auto",
+      "licence": "Apache-2.0 (Autoware classifier)"
+    },
+    {
+      "block": "signs",
+      "name": "lisa_crops",
+      "detail": "OCR-verified speed limits",
+      "licence": "AGPL-3.0 (Ultralytics) + LISA academic licence; PP-OCRv6 Apache-2.0"
+    }
+  ],
+  "server": {
+    "modeArg": "auto",
+    "wsPath": "/perception",
+    "port": 64252,
+    "loop": false,
+    "maxInFlight": 2
+  },
+  "navigation": {
+    "mode": "sim",
+    "available": true,
+    "error": null
+  },
+  "role": "controller",
+  "safety": "Informational driver display only (plan section 38): no steering, braking or throttle decisions. Distances, TTC and light states are estimates; UNKNOWN means unknown and GREEN is never permission."
+}

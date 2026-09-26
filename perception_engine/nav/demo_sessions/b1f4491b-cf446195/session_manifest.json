@@ -1,0 +1,28 @@
+{
+  "sessionId": "demo_b1f4491b-cf446195",
+  "capturedAtMs": 1730000000000,
+  "videoFile": "b1f4491b-cf446195.mov",
+  "videoId": "b1f4491b-cf446195",
+  "routeFile": "route.json",
+  "tripStateFile": "trip_state.jsonl",
+  "source": "simulated",
+  "notes": "SYNTHETIC DEMO SESSION: route from the phase1 mock provider, trip samples interpolated along it and timed to the clip. It does not match the video content (demo only). Real sessions come from the phase1 android-collector + route.json.",
+  "demo": {
+    "generator": "perception_engine/nav/make_demo_session.js",
+    "clip": "b1f4491b-cf446195",
+    "scene": "highway",
+    "provider": "mock",
+    "origin": "33.7756,-84.3963",
+    "destinationQuery": "Amtrak station in Atlanta",
+    "clipDurationSeconds": 40.08,
+    "sampleHz": 2,
+    "samples": 81,
+    "routeMeters": 985,
+    "coveredMeters": 985,
+    "meanSpeedMps": 24.58,
+    "stepsRescaled": {
+      "fromMeters": 300,
+      "toMeters": 985
+    }
+  }
+}

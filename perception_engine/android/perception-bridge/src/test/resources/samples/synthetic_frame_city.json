@@ -1,0 +1,67 @@
+{
+  "type": "perception.frame",
+  "schemaVersion": 1,
+  "seq": 128,
+  "sessionId": "synthetic-0001",
+  "source": { "kind": "video", "id": "b1ff4656-0435391e" },
+  "frameIndex": 256,
+  "ptsSeconds": 8.533,
+  "serverTimeMs": 1790380800123,
+  "processingMs": 46.8,
+  "image": { "width": 1280, "height": 720 },
+  "camera": { "focalPx": 1000.0, "principalPoint": [640.0, 360.0], "horizonY": 352.5, "cameraHeightMeters": 1.4 },
+  "objects": [
+    {
+      "id": 7, "class": "car", "bbox": [575.2, 441.0, 724.8, 551.3], "confidence": 0.91, "ageFrames": 120,
+      "distanceMeters": 12.4, "distanceMethod": "da3_metric_large", "distanceConfidence": 0.82,
+      "lateralMeters": 0.3, "ttcSeconds": 3.6, "approaching": true, "inEgoPath": true,
+      "lightState": null, "lightConfidence": null
+    },
+    {
+      "id": 3, "class": "truck", "bbox": [210, 380, 360, 470], "confidence": 0.77, "ageFrames": 44,
+      "distanceMeters": 31.0, "distanceMethod": "da3_metric_large", "distanceConfidence": 0.7,
+      "lateralMeters": -4.1, "ttcSeconds": null, "approaching": false, "inEgoPath": false
+    },
+    {
+      "id": 42, "class": "traffic light", "bbox": [668.0, 250.5, 679.0, 276.0], "confidence": 0.68, "ageFrames": 61,
+      "distanceMeters": 46.0, "distanceMethod": "size_prior", "distanceConfidence": 0.4,
+      "lateralMeters": 1.2, "lightState": "RED", "lightConfidence": 0.93
+    },
+    {
+      "id": 21, "class": "pedestrian", "bbox": [880.0, 402.0, 905.0, 470.0], "confidence": 0.63, "ageFrames": 9,
+      "distanceMeters": 18.7, "distanceMethod": "geometry", "distanceConfidence": 0.5,
+      "lateralMeters": 4.5, "ttcSeconds": null, "approaching": null, "inEgoPath": false
+    },
+    {
+      "id": 55, "class": "traffic sign", "bbox": [1010.0, 250.0, 1050.0, 300.0], "confidence": 0.71, "ageFrames": 12
+    }
+  ],
+  "signs": [
+    { "id": 55, "signClass": "speed_limit_35", "bbox": [1010.0, 250.0, 1050.0, 300.0], "confidence": 0.88, "distanceMeters": 24.0 },
+    { "id": null, "signClass": "stop", "bbox": [1100.0, 300.0, 1130.0, 330.0], "confidence": 0.55, "distanceMeters": null }
+  ],
+  "lanes": {
+    "currentLane": 2,
+    "laneCount": 3,
+    "laneBoundaries": [
+      [[190.0, 720.0], [420.0, 520.0], [560.0, 400.0]],
+      [[470.0, 720.0], [560.0, 520.0], [610.0, 400.0]],
+      [[810.0, 720.0], [720.0, 520.0], [670.0, 400.0]],
+      [[1090.0, 720.0], [860.0, 520.0], [720.0, 400.0]]
+    ],
+    "confidence": 0.84
+  },
+  "road": {
+    "drivableCoverage": 0.41,
+    "egoPathPolygon": [[470.0, 720.0], [610.0, 380.0], [670.0, 380.0], [810.0, 720.0]],
+    "horizonY": 352.5,
+    "vanishingPoint": [641.5, 352.5],
+    "anchorPoints": [
+      { "name": "ego_path_10m", "xy": [640.0, 500.0], "groundXZ": [0.0, 10.0], "valid": true },
+      { "name": "ego_path_20m", "xy": [640.0, 430.0], "groundXZ": [0.0, 20.0], "valid": true },
+      { "name": "ego_path_40m", "xy": [640.0, 395.0], "groundXZ": null, "valid": false }
+    ]
+  },
+  "blockAges": { "detection": 0, "tracking": 0, "depth": 1, "lanes": 0, "road": 2, "signs": 0, "lights": 0 },
+  "timingsMs": { "detection": 14.2, "tracking": 10.1, "depth": 0.0, "lanes": 15.3, "lights": 6.8, "signs": 13.0, "serialize": 0.4 }
+}

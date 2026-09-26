@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hackgt13.local/contracts/schemas/client.playback.schema.json",
+  "title": "client.playback (protocol v2)",
+  "description": "Client -> server (sim controller), ~10 Hz and on every seek / pause / resume. The server extrapolates ptsSeconds + elapsed * rate and analyses lookaheadSeconds ahead; a jump of more than 0.6 s is treated as a seek (trackers reset, new session + hello). A different videoId switches the clip.",
+  "type": "object",
+  "required": [
+    "type",
+    "videoId",
+    "ptsSeconds",
+    "playing"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "type": {
+      "const": "client.playback"
+    },
+    "videoId": {
+      "type": "string"
+    },
+    "ptsSeconds": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Player position (container pts) in seconds."
+    },
+    "playing": {
+      "type": "boolean"
+    },
+    "rate": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "default": 1.0
+    },
+    "clientTimeNs": {
+      "type": "integer"
+    }
+  }
+}

@@ -1,0 +1,371 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hackgt13.local/contracts/schemas/perception.update.schema.json",
+  "title": "perception.update wave 2 (protocol v2)",
+  "description": "Server -> client whenever the SLOW lane finishes a run (PROTOCOL_v2.md): distance (depth network + geometry, per-track Kalman) for the snapshot's track ids, lanes + road, signs. seq / frameIndex / ptsSeconds / echo identify the analysed frame (usually a few frames older than the newest wave 1). Blocks that did not run are omitted; an empty list means the block ran and found nothing. Track ids match wave-1 objects[].id of the same session. Produced by perception_engine/perception/realtime/wire.py make_update().",
+  "type": "object",
+  "required": [
+    "type",
+    "schemaVersion",
+    "wave",
+    "seq",
+    "sessionId",
+    "frameIndex",
+    "ptsSeconds",
+    "echo",
+    "serverTimeMs",
+    "processingMs",
+    "camera",
+    "blocks",
+    "timingsMs"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "type": {
+      "const": "perception.update"
+    },
+    "schemaVersion": {
+      "const": 2
+    },
+    "wave": {
+      "const": 2
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "sessionId": {
+      "type": "string"
+    },
+    "frameIndex": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "ptsSeconds": {
+      "type": "number"
+    },
+    "echo": {
+      "$ref": "#/$defs/echo"
+    },
+    "serverTimeMs": {
+      "type": "integer",
+      "description": "Unix epoch ms on the laptop when the message was built."
+    },
+    "processingMs": {
+      "type": "number",
+      "description": "Frame available on the server -> update built."
+    },
+    "camera": {
+      "$ref": "#/$defs/camera"
+    },
+    "distances": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "distanceMeters",
+          "distanceMethod",
+          "distanceConfidence",
+          "lateralMeters"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "distanceMeters": {
+            "type": "number"
+          },
+          "distanceMethod": {
+            "enum": [
+              "fused",
+              "depth_model",
+              "ground_plane",
+              "width_prior",
+              "geometry",
+              "size_prior",
+              null
+            ]
+          },
+          "distanceConfidence": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "lateralMeters": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "+ = right of the camera axis."
+          }
+        }
+      }
+    },
+    "lanes": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/lanes"
+        }
+      ]
+    },
+    "road": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/road"
+        }
+      ]
+    },
+    "signs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/sign"
+      }
+    },
+    "blocks": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "distance",
+          "depth",
+          "lanes",
+          "segmentation",
+          "signs"
+        ]
+      },
+      "description": "Blocks that ran: distance = per-track distance update; depth = the depth network ran (else geometry + Kalman only)."
+    },
+    "timingsMs": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "number"
+      }
+    }
+  },
+  "$defs": {
+    "point": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      },
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "bbox": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      },
+      "minItems": 4,
+      "maxItems": 4,
+      "description": "[x1, y1, x2, y2] px in the `image` space (the upright image; see image)."
+    },
+    "polyline": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/point"
+      }
+    },
+    "echo": {
+      "description": "Copied from the SDC1 uplink header of the analysed frame (live mode); null for video / sim. The client measures capture -> result latency on its own clock: nowNs - captureTimeNs.",
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "required": [
+            "frameId",
+            "captureTimeNs"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "frameId": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            "captureTimeNs": {
+              "type": "integer"
+            }
+          }
+        }
+      ]
+    },
+    "camera": {
+      "type": "object",
+      "required": [
+        "focalPx",
+        "principalPoint"
+      ],
+      "additionalProperties": false,
+      "description": "Pinhole camera of the session in `image` pixels: client.hello intrinsics (live) or defaults (BDD 700 px focal at 1280 wide); horizonY / cameraHeightMeters are the depth block's current estimates (a client-given mountHeightMeters is used as is).",
+      "properties": {
+        "focalPx": {
+          "type": "number"
+        },
+        "principalPoint": {
+          "$ref": "#/$defs/point"
+        },
+        "horizonY": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "cameraHeightMeters": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      }
+    },
+    "sign": {
+      "type": "object",
+      "required": [
+        "signClass",
+        "bbox",
+        "confidence"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "Static-tracker id (>= staticIdOffset)."
+        },
+        "signClass": {
+          "type": "string",
+          "description": "camelCase, e.g. stop, yield, doNotEnter, speedLimit45, pedestrianCrossing"
+        },
+        "bbox": {
+          "$ref": "#/$defs/bbox"
+        },
+        "confidence": {
+          "type": "number"
+        },
+        "distanceMeters": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      }
+    },
+    "lanes": {
+      "type": "object",
+      "description": "Plan section 10. Lanes numbered 1..laneCount from the left.",
+      "required": [
+        "currentLane",
+        "laneCount",
+        "laneBoundaries",
+        "confidence"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "currentLane": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "laneCount": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "laneBoundaries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/polyline"
+          },
+          "description": "Left to right, <= 20 points each."
+        },
+        "confidence": {
+          "type": "number"
+        }
+      }
+    },
+    "road": {
+      "type": "object",
+      "description": "Plan section 13: where AR content can be anchored.",
+      "required": [
+        "drivableCoverage",
+        "egoPathPolygon",
+        "anchorPoints"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "drivableCoverage": {
+          "type": "number"
+        },
+        "egoPathPolygon": {
+          "$ref": "#/$defs/polyline"
+        },
+        "horizonY": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "vanishingPoint": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/point"
+            }
+          ]
+        },
+        "anchorPoints": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "xy",
+              "valid"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "e.g. ego_lane_center_near / _mid / _far, left_lane_center_mid"
+              },
+              "xy": {
+                "$ref": "#/$defs/point"
+              },
+              "groundXZ": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/$defs/point"
+                  }
+                ],
+                "description": "[lateral m (+ right), forward m] on the flat ground, from the session camera."
+              },
+              "valid": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

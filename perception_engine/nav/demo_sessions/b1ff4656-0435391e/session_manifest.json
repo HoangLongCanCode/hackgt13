@@ -1,0 +1,25 @@
+{
+  "sessionId": "demo_b1ff4656-0435391e",
+  "capturedAtMs": 1730000000000,
+  "videoFile": "b1ff4656-0435391e.mov",
+  "videoId": "b1ff4656-0435391e",
+  "routeFile": "route.json",
+  "tripStateFile": "trip_state.jsonl",
+  "source": "simulated",
+  "notes": "SYNTHETIC DEMO SESSION: route from the phase1 mock provider, trip samples interpolated along it and timed to the clip. It does not match the video content (demo only). Real sessions come from the phase1 android-collector + route.json.",
+  "demo": {
+    "generator": "perception_engine/nav/make_demo_session.js",
+    "clip": "b1ff4656-0435391e",
+    "scene": "city",
+    "provider": "mock",
+    "origin": "33.7756,-84.3963",
+    "destinationQuery": "Piedmont Park",
+    "clipDurationSeconds": 40.13,
+    "sampleHz": 2,
+    "samples": 81,
+    "routeMeters": 307,
+    "coveredMeters": 307,
+    "meanSpeedMps": 7.64,
+    "stepsRescaled": null
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "type": "perception.stats",
+  "schemaVersion": 2,
+  "sessionId": "video-b1ff4656-0435391e-20260926T082428-b382c0",
+  "serverTimeMs": 1790429087628,
+  "mode": "video",
+  "windowSeconds": 3.0,
+  "outputFps": 16.19,
+  "wave2Fps": 7.35,
+  "distanceFps": 7.35,
+  "sourceFps": 30.051,
+  "wave1ProcessingMs": {
+    "p50": 75.8,
+    "p95": 95.0
+  },
+  "wave2ProcessingMs": {
+    "p50": 231.47,
+    "p95": 275.17
+  },
+  "wave1ComputeMs": {
+    "p50": 61.94,
+    "p95": 72.71
+  },
+  "wave2ComputeMs": {
+    "p50": 129.7,
+    "p95": 182.98
+  },
+  "framesIn": 580,
+  "framesAnalysed": 307,
+  "framesSkipped": 0,
+  "updates": 153,
+  "clients": 1,
+  "sendDropped": 0,
+  "lookaheadSeconds": null,
+  "uptimeSeconds": 41.9,
+  "framesDropped": 271,
+  "uplinkClient": null
+}

@@ -1,0 +1,482 @@
+{
+  "worldSnapshot": {
+    "timing": {
+      "sessionId": "live-fake-tablet-jvm-20260926T083335-f8aa0d",
+      "seq": 185,
+      "frameIndex": 185,
+      "ptsSeconds": 12.4008,
+      "serverTimeMs": 1790429628359,
+      "receivedAtMs": 1790429628358,
+      "processingMs": 21.22,
+      "networkLatencyMs": -1.0,
+      "endToEndLatencyMs": 21.22,
+      "receiveFps": 15.4,
+      "analysedFps": 15.0,
+      "framesReceived": 186,
+      "serverDroppedFrames": 0,
+      "wave": 1,
+      "frameId": 185,
+      "captureTimeNs": 360541651746400,
+      "receivedAtNs": 360541674033800,
+      "captureToResultMs": 22.3
+    },
+    "image": {
+      "width": 960,
+      "height": 540
+    },
+    "camera": {
+      "focalPx": 525.0,
+      "principalPoint": [
+        480.0,
+        270.0
+      ],
+      "horizonY": 277.5,
+      "cameraHeightMeters": 1.35
+    },
+    "objects": {
+      "2": {
+        "id": 2,
+        "class": "car",
+        "bbox": [
+          337.9,
+          276.3,
+          421.4,
+          340.9
+        ],
+        "confidence": 0.876,
+        "ageFrames": 186,
+        "firstSeenPts": 0.0,
+        "lastSeenPts": 12.4008,
+        "visible": true,
+        "distanceMeters": 12.65,
+        "rawDistanceMeters": 12.01,
+        "distanceAgeSeconds": 0.066,
+        "distanceMethod": "fused",
+        "distanceConfidence": 0.927,
+        "lateralMeters": -2.06,
+        "relativeSpeedMps": 0.84,
+        "approaching": false,
+        "inEgoPath": true,
+        "bboxVelocityPxPerS": [
+          -67.4,
+          18.8,
+          -74.8,
+          5.7
+        ]
+      },
+      "31": {
+        "id": 31,
+        "class": "car",
+        "bbox": [
+          900.0,
+          330.0,
+          960.0,
+          540.0
+        ],
+        "confidence": 0.746,
+        "ageFrames": 61,
+        "firstSeenPts": 8.0017,
+        "lastSeenPts": 12.0022,
+        "visible": false,
+        "distanceMeters": 1.77,
+        "rawDistanceMeters": 2.29,
+        "distanceAgeSeconds": 0.399,
+        "distanceMethod": "depth_model",
+        "distanceConfidence": 0.6,
+        "lateralMeters": 1.97,
+        "relativeSpeedMps": -1.44,
+        "ttcSeconds": 1.63,
+        "ttcSource": "range_rate",
+        "approaching": true,
+        "inEgoPath": false
+      },
+      "46": {
+        "id": 46,
+        "class": "car",
+        "bbox": [
+          710.4,
+          272.6,
+          960.0,
+          523.1
+        ],
+        "confidence": 0.936,
+        "ageFrames": 29,
+        "firstSeenPts": 10.534,
+        "lastSeenPts": 12.4008,
+        "visible": true,
+        "distanceMeters": 2.65,
+        "rawDistanceMeters": 3.36,
+        "distanceAgeSeconds": 0.066,
+        "distanceMethod": "depth_model",
+        "distanceConfidence": 0.6,
+        "lateralMeters": 2.31,
+        "relativeSpeedMps": -4.06,
+        "ttcSeconds": 0.72,
+        "ttcSource": "range_rate",
+        "approaching": true,
+        "inEgoPath": false,
+        "bboxVelocityPxPerS": [
+          64.4,
+          8.4,
+          1.2,
+          178.8
+        ]
+      },
+      "34": {
+        "id": 34,
+        "class": "car",
+        "bbox": [
+          602.6,
+          283.5,
+          796.0,
+          400.6
+        ],
+        "confidence": 0.897,
+        "ageFrames": 63,
+        "firstSeenPts": 10.6689,
+        "lastSeenPts": 12.4008,
+        "visible": true,
+        "distanceMeters": 5.5,
+        "rawDistanceMeters": 6.17,
+        "distanceAgeSeconds": 0.066,
+        "distanceMethod": "fused",
+        "distanceConfidence": 0.849,
+        "lateralMeters": 2.53,
+        "relativeSpeedMps": -5.11,
+        "ttcSeconds": 1.14,
+        "ttcSource": "range_rate",
+        "approaching": true,
+        "inEgoPath": false,
+        "bboxVelocityPxPerS": [
+          -20.8,
+          14.2,
+          118.2,
+          60.4
+        ]
+      }
+    },
+    "lanes": {
+      "lanes": {
+        "currentLane": 1,
+        "laneCount": 1,
+        "laneBoundaries": [
+          [
+            [
+              -213.6,
+              454.5
+            ],
+            [
+              -181.7,
+              445.5
+            ],
+            [
+              -149.9,
+              436.5
+            ],
+            [
+              -118.0,
+              427.5
+            ]
+          ]
+        ],
+        "confidence": 0.206
+      },
+      "currentLane": 1,
+      "laneCount": 1,
+      "measuredPts": 12.3347,
+      "ageSeconds": 0.066
+    },
+    "road": {
+      "road": {
+        "drivableCoverage": 0.1864,
+        "egoPathPolygon": [
+          [
+            -583.6,
+            538.5
+          ],
+          [
+            -31.7,
+            412.5
+          ],
+          [
+            727.8,
+            412.5
+          ],
+          [
+            1066.9,
+            538.5
+          ]
+        ],
+        "horizonY": 305.1,
+        "anchorPoints": [
+          {
+            "name": "ego_lane_center_near",
+            "xy": [
+              271.2,
+              503.5
+            ],
+            "groundXZ": [
+              -1.42,
+              3.68
+            ],
+            "valid": true
+          },
+          {
+            "name": "ego_lane_center_mid",
+            "xy": [
+              320.5,
+              445.1
+            ],
+            "groundXZ": [
+              -1.54,
+              5.18
+            ],
+            "valid": true
+          },
+          {
+            "name": "ego_lane_center_far",
+            "xy": [
+              369.8,
+              386.8
+            ],
+            "groundXZ": [
+              -1.82,
+              8.8
+            ],
+            "valid": true
+          }
+        ]
+      },
+      "measuredPts": 12.3347,
+      "ageSeconds": 0.066
+    },
+    "signs": [
+      {
+        "key": "id:1000042",
+        "sign": {
+          "id": 1000042,
+          "signClass": "stop",
+          "bbox": [
+            932.0,
+            143.0,
+            960.0,
+            167.0
+          ],
+          "confidence": 0.467,
+          "distanceMeters": 14.3
+        },
+        "firstSeenPts": 10.3353,
+        "lastSeenPts": 10.6689,
+        "seenCount": 3
+      }
+    ],
+    "blockAges": {
+      "detection": 0,
+      "tracking": 0,
+      "lights": 0,
+      "distance": 2,
+      "depth": 2,
+      "lanes": 2,
+      "signs": 3,
+      "road": 2
+    },
+    "timingsMs": {
+      "detect": 13.43,
+      "track": 6.2,
+      "trackStatic": 0.32,
+      "lights": 0.01,
+      "total": 20.0,
+      "queueWait": 0.07,
+      "jpegDecode": 0.89,
+      "fastLane": 20.06
+    },
+    "serverStats": {
+      "sessionId": "live-fake-tablet-jvm-20260926T083335-f8aa0d",
+      "serverTimeMs": 1790429628288,
+      "outputFps": 14.96,
+      "wave1ProcessingMs": {
+        "p50": 46.01,
+        "p95": 59.43
+      },
+      "wave2ProcessingMs": {
+        "p50": 135.73,
+        "p95": 173.29
+      },
+      "framesIn": 558,
+      "framesAnalysed": 557,
+      "framesSkipped": 0,
+      "framesDropped": 0,
+      "clients": 1
+    },
+    "wave2": {
+      "seq": 184,
+      "frameIndex": 184,
+      "ptsSeconds": 12.3347,
+      "processingMs": 127.82,
+      "blocks": [
+        "distance",
+        "depth",
+        "lanes",
+        "signs"
+      ],
+      "timingsMs": {
+        "distance": 47.41,
+        "depthNet": 41.75,
+        "lanes": 15.84,
+        "signs": 0.0,
+        "total": 63.26
+      },
+      "receivedAtMs": 1790429628399,
+      "lagSeconds": 0.066
+    },
+    "perceptionStale": false,
+    "revision": 348,
+    "predictedAheadMs": 67.9,
+    "objectsOmitted": 12
+  },
+  "drivingContext": {
+    "seq": 185,
+    "ptsSeconds": 12.4008,
+    "following": {
+      "state": "CLOSE",
+      "leadTrackId": 2,
+      "leadClass": "car",
+      "distanceMeters": 12.54,
+      "relativeSpeedMps": 0.84,
+      "headwaySeconds": 1.64
+    },
+    "pedestriansInPath": [],
+    "navigation": {
+      "maneuver": "ARRIVE",
+      "distanceMeters": 112.0,
+      "label": "Piedmont Park",
+      "requiredLanes": [],
+      "egoSpeedMps": 7.64,
+      "audio": "You have arrived at your destination.",
+      "offRoute": false,
+      "laneHintInferred": false
+    },
+    "activeSigns": [],
+    "activeAlerts": [
+      {
+        "type": "FOLLOWING_CLOSE",
+        "priority": "TRAFFIC_ALERT",
+        "text": "CAR | 12.5 m",
+        "ptsSeconds": 12.4008,
+        "seq": 185,
+        "distanceMeters": 12.54,
+        "trackId": 2
+      }
+    ],
+    "perceptionStale": false
+  },
+  "navigation": {
+    "routeState": {
+      "action": "ARRIVE",
+      "audio": "You have arrived at your destination.",
+      "ui": "WARNING",
+      "distanceMeters": 112.0,
+      "offRoute": false,
+      "etaSeconds": 15.0,
+      "remainingDistanceMeters": 112.0,
+      "turnDirection": "straight",
+      "roadName": "Piedmont Park"
+    },
+    "packet": {
+      "packetType": "SPATIAL_NAVIGATION_PACKET",
+      "progress": {
+        "currentLocation": {
+          "lat": 33.7772705,
+          "lng": -84.3960018
+        },
+        "heading": 9.6,
+        "speedMps": 7.64,
+        "routeIndex": 1,
+        "distanceTraveledMeters": 188,
+        "remainingDistanceMeters": 112,
+        "etaSeconds": 15,
+        "offRoute": false
+      },
+      "activeManeuver": {
+        "eventId": "step_3",
+        "type": "ARRIVE",
+        "distanceMeters": 300,
+        "roadName": "Piedmont Park",
+        "instruction": "Arrive at Piedmont Park"
+      },
+      "spatialInstructions": [
+        {
+          "id": "spatial_step_3",
+          "type": "WARNING",
+          "anchor": {
+            "kind": "ROUTE_POINT",
+            "routeDistanceMeters": 300
+          },
+          "content": "ARRIVE",
+          "priority": 2,
+          "lifetimeMs": 8000
+        }
+      ],
+      "audioInstructions": [
+        {
+          "id": "audio_step_3",
+          "content": "You have arrived at your destination.",
+          "priority": 2,
+          "speakAtDistanceMeters": 300
+        }
+      ],
+      "...": "trimmed"
+    },
+    "tripTimestampMs": 1730000024580,
+    "serverTimeMs": 1790429627954,
+    "receivedAtNs": 360541269355100,
+    "sequence": 27,
+    "stale": false
+  },
+  "navigationState": {
+    "maneuver": "ARRIVE",
+    "distanceMeters": 112.0,
+    "label": "Piedmont Park",
+    "requiredLanes": [],
+    "egoSpeedMps": 7.64,
+    "audio": "You have arrived at your destination.",
+    "offRoute": false,
+    "laneHintInferred": false
+  },
+  "linkStatus": {
+    "state": "CONNECTED",
+    "url": "ws://127.0.0.1:8770/perception",
+    "mode": "live",
+    "serverMode": "live",
+    "sessionId": "live-fake-tablet-jvm-20260926T083335-f8aa0d",
+    "serverReady": true,
+    "role": "controller",
+    "takenOver": false,
+    "perceptionStale": false,
+    "rttMs": 0.8,
+    "captureToResultMsP50": 49.1,
+    "captureToResultMsP95": 63.7,
+    "resultFps": 15.5,
+    "updateFps": 14.0,
+    "uplinkFps": 15.0,
+    "maxInFlight": 2,
+    "inFlight": 0,
+    "credits": 2,
+    "framesOffered": 189,
+    "framesSent": 186,
+    "framesDroppedNoCredit": 1,
+    "framesDroppedNotReady": 2,
+    "skips": 0,
+    "creditTimeouts": 0,
+    "lateAnswers": 0,
+    "simLateResults": 0,
+    "simBuffered": 0,
+    "navigationPackets": 27,
+    "navigationAgeMs": 425.3,
+    "tripStatesSent": 25,
+    "serverNavigationMode": "live",
+    "serverNavigationAvailable": true,
+    "reconnects": 0,
+    "decodeErrors": 0
+  }
+}

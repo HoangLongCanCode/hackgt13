@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hackgt13.local/contracts/schemas/perception.error.schema.json",
+  "title": "perception.error (protocol v2)",
+  "description": "Server -> client: a message could not be honoured. Shown in the Kotlin bridge's LinkStatus.serverError (cleared by the next perception.hello). Rate-limited per code and client.",
+  "type": "object",
+  "required": [
+    "type",
+    "code",
+    "message",
+    "fatal",
+    "detail",
+    "serverTimeMs"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "type": {
+      "const": "perception.error"
+    },
+    "code": {
+      "enum": [
+        "badMessage",
+        "modeNotAvailable",
+        "unknownVideo",
+        "notUplinkClient",
+        "internal"
+      ]
+    },
+    "message": {
+      "type": "string"
+    },
+    "fatal": {
+      "type": "boolean"
+    },
+    "detail": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "serverTimeMs": {
+      "type": "integer",
+      "description": "Unix epoch ms on the laptop when the message was built."
+    }
+  }
+}

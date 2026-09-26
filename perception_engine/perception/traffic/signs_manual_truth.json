@@ -1,0 +1,646 @@
+{
+ "method": "Visual inspection by the agent (Claude) of the 40-tile contact sheet from the first eval_signs run (273 frames, 13 clips, every 2 s; dark tiles re-rendered 2.2x brightened at 300 px). truth classes: plan classes, 'school' (S1-1 / fluorescent school-ped), 'other' (other real traffic sign), 'not_a_sign' (billboard/banner). Tiles are not independent: the same physical sign recurs (one 'CASH' billboard 4x, one DO NOT ENTER 4x, one SPEED LIMIT 25 sign 3x).",
+ "tiles": [
+  {
+   "sheet_index": 0,
+   "backend": "coco_stop",
+   "clip": "b9ecc316-529acd3c",
+   "frame": 540,
+   "t": 17.83,
+   "bbox": [
+    588.0,
+    302.1,
+    608.1,
+    321.5
+   ],
+   "raw_pred_first_run": "stop",
+   "truth": "stop",
+   "note": ""
+  },
+  {
+   "sheet_index": 1,
+   "backend": "lisa_crops",
+   "clip": "c38cd3f6-c74ca48b",
+   "frame": 660,
+   "t": 21.76,
+   "bbox": [
+    259.5,
+    281.3,
+    303.6,
+    336.7
+   ],
+   "raw_pred_first_run": "pedestrian_crossing",
+   "truth": "school",
+   "note": "school S1-1"
+  },
+  {
+   "sheet_index": 2,
+   "backend": "lisa_crops",
+   "clip": "b20e291a-6012d836",
+   "frame": 600,
+   "t": 19.89,
+   "bbox": [
+    590.5,
+    199.7,
+    609.1,
+    223.7
+   ],
+   "raw_pred_first_run": "speed_limit_25",
+   "truth": "school",
+   "note": "fluorescent school/ped sign"
+  },
+  {
+   "sheet_index": 3,
+   "backend": "lisa_crops",
+   "clip": "b20e291a-6012d836",
+   "frame": 1140,
+   "t": 37.9,
+   "bbox": [
+    656.1,
+    136.0,
+    681.3,
+    166.5
+   ],
+   "raw_pred_first_run": "speed_limit_35",
+   "truth": "speed_limit_25",
+   "note": ""
+  },
+  {
+   "sheet_index": 4,
+   "backend": "lisa_crops",
+   "clip": "b2064e61-2beadd45",
+   "frame": 1080,
+   "t": 35.99,
+   "bbox": [
+    55.5,
+    372.3,
+    80.8,
+    411.5
+   ],
+   "raw_pred_first_run": "stop",
+   "truth": "do_not_enter",
+   "note": "DO NOT ENTER (night)"
+  },
+  {
+   "sheet_index": 5,
+   "backend": "lisa_crops",
+   "clip": "b9ecc316-529acd3c",
+   "frame": 1020,
+   "t": 33.84,
+   "bbox": [
+    1087.3,
+    250.4,
+    1125.8,
+    328.7
+   ],
+   "raw_pred_first_run": "yield",
+   "truth": "yield",
+   "note": ""
+  },
+  {
+   "sheet_index": 6,
+   "backend": "lisa_full",
+   "clip": "c38cd3f6-c74ca48b",
+   "frame": 660,
+   "t": 21.76,
+   "bbox": [
+    259.0,
+    279.0,
+    304.2,
+    338.0
+   ],
+   "raw_pred_first_run": "pedestrian_crossing",
+   "truth": "school",
+   "note": ""
+  },
+  {
+   "sheet_index": 7,
+   "backend": "lisa_full",
+   "clip": "b2064e61-2beadd45",
+   "frame": 360,
+   "t": 11.97,
+   "bbox": [
+    845.5,
+    313.0,
+    881.3,
+    355.2
+   ],
+   "raw_pred_first_run": "speed_limit_25",
+   "truth": "not_a_sign",
+   "note": "'CASH' billboard"
+  },
+  {
+   "sheet_index": 8,
+   "backend": "lisa_full",
+   "clip": "b2064e61-2beadd45",
+   "frame": 120,
+   "t": 3.97,
+   "bbox": [
+    805.9,
+    338.6,
+    831.8,
+    370.8
+   ],
+   "raw_pred_first_run": "speed_limit_35",
+   "truth": "not_a_sign",
+   "note": "'CASH' billboard"
+  },
+  {
+   "sheet_index": 9,
+   "backend": "lisa_full",
+   "clip": "b2064e61-2beadd45",
+   "frame": 840,
+   "t": 27.99,
+   "bbox": [
+    314.7,
+    324.7,
+    335.2,
+    355.3
+   ],
+   "raw_pred_first_run": "stop",
+   "truth": "do_not_enter",
+   "note": "DO NOT ENTER (night)"
+  },
+  {
+   "sheet_index": 10,
+   "backend": "lisa_full",
+   "clip": "b1f4491b-cf446195",
+   "frame": 1200,
+   "t": 39.76,
+   "bbox": [
+    1149.0,
+    165.8,
+    1190.1,
+    187.1
+   ],
+   "raw_pred_first_run": "yield",
+   "truth": "other",
+   "note": "guide-sign frame"
+  },
+  {
+   "sheet_index": 11,
+   "backend": "coco_stop",
+   "clip": "b9ecc316-529acd3c",
+   "frame": 600,
+   "t": 19.83,
+   "bbox": [
+    245.1,
+    231.6,
+    300.2,
+    283.3
+   ],
+   "raw_pred_first_run": "stop",
+   "truth": "stop",
+   "note": ""
+  },
+  {
+   "sheet_index": 12,
+   "backend": "lisa_crops",
+   "clip": "b9ecc316-529acd3c",
+   "frame": 540,
+   "t": 17.83,
+   "bbox": [
+    272.9,
+    263.2,
+    303.7,
+    295.9
+   ],
+   "raw_pred_first_run": "pedestrian_crossing",
+   "truth": "pedestrian_crossing",
+   "note": ""
+  },
+  {
+   "sheet_index": 13,
+   "backend": "lisa_crops",
+   "clip": "b23d2079-0c019d8e",
+   "frame": 0,
+   "t": 0.0,
+   "bbox": [
+    161.5,
+    104.6,
+    221.9,
+    195.5
+   ],
+   "raw_pred_first_run": "speed_limit_25",
+   "truth": "speed_limit_25",
+   "note": ""
+  },
+  {
+   "sheet_index": 14,
+   "backend": "lisa_crops",
+   "clip": "c38cd3f6-c74ca48b",
+   "frame": 120,
+   "t": 3.74,
+   "bbox": [
+    335.2,
+    308.4,
+    367.4,
+    345.5
+   ],
+   "raw_pred_first_run": "speed_limit_35",
+   "truth": "other",
+   "note": "NO TURN ON RED ARROW"
+  },
+  {
+   "sheet_index": 15,
+   "backend": "lisa_crops",
+   "clip": "bc07d865-f526e4d9",
+   "frame": 720,
+   "t": 23.92,
+   "bbox": [
+    1179.0,
+    416.5,
+    1196.6,
+    437.6
+   ],
+   "raw_pred_first_run": "stop",
+   "truth": "stop",
+   "note": ""
+  },
+  {
+   "sheet_index": 16,
+   "backend": "lisa_crops",
+   "clip": "bf1af616-e750e7dd",
+   "frame": 1080,
+   "t": 36.05,
+   "bbox": [
+    1238.7,
+    268.8,
+    1279.3,
+    302.4
+   ],
+   "raw_pred_first_run": "yield",
+   "truth": "yield",
+   "note": ""
+  },
+  {
+   "sheet_index": 17,
+   "backend": "lisa_full",
+   "clip": "b1ff4656-0435391e",
+   "frame": 60,
+   "t": 1.87,
+   "bbox": [
+    920.6,
+    221.0,
+    987.4,
+    305.6
+   ],
+   "raw_pred_first_run": "pedestrian_crossing",
+   "truth": "school",
+   "note": "school S1-1 (pentagon, two children, AHEAD plate); review fix: was pedestrian_crossing, inconsistent with tiles 1/2/6"
+  },
+  {
+   "sheet_index": 18,
+   "backend": "lisa_full",
+   "clip": "b2064e61-2beadd45",
+   "frame": 420,
+   "t": 13.98,
+   "bbox": [
+    988.5,
+    183.0,
+    1052.6,
+    253.9
+   ],
+   "raw_pred_first_run": "speed_limit_25",
+   "truth": "not_a_sign",
+   "note": "'CASH' billboard"
+  },
+  {
+   "sheet_index": 19,
+   "backend": "lisa_full",
+   "clip": "b1ff4656-0435391e",
+   "frame": 240,
+   "t": 7.88,
+   "bbox": [
+    324.4,
+    269.6,
+    336.5,
+    290.4
+   ],
+   "raw_pred_first_run": "speed_limit_35",
+   "truth": "speed_limit_20",
+   "note": "SPEED LIMIT 20"
+  },
+  {
+   "sheet_index": 20,
+   "backend": "lisa_full",
+   "clip": "b2064e61-2beadd45",
+   "frame": 1140,
+   "t": 37.99,
+   "bbox": [
+    228.6,
+    320.4,
+    248.2,
+    350.3
+   ],
+   "raw_pred_first_run": "stop",
+   "truth": "do_not_enter",
+   "note": "DO NOT ENTER (night)"
+  },
+  {
+   "sheet_index": 21,
+   "backend": "lisa_full",
+   "clip": "b9ecc316-529acd3c",
+   "frame": 780,
+   "t": 25.83,
+   "bbox": [
+    123.1,
+    288.4,
+    143.9,
+    311.7
+   ],
+   "raw_pred_first_run": "yield",
+   "truth": "yield",
+   "note": ""
+  },
+  {
+   "sheet_index": 22,
+   "backend": "coco_stop",
+   "clip": "b9ecc316-529acd3c",
+   "frame": 600,
+   "t": 19.83,
+   "bbox": [
+    1148.5,
+    178.0,
+    1247.8,
+    268.6
+   ],
+   "raw_pred_first_run": "stop",
+   "truth": "stop",
+   "note": ""
+  },
+  {
+   "sheet_index": 23,
+   "backend": "lisa_crops",
+   "clip": "b9ecc316-529acd3c",
+   "frame": 540,
+   "t": 17.83,
+   "bbox": [
+    828.7,
+    301.8,
+    862.3,
+    335.5
+   ],
+   "raw_pred_first_run": "pedestrian_crossing",
+   "truth": "pedestrian_crossing",
+   "note": ""
+  },
+  {
+   "sheet_index": 24,
+   "backend": "lisa_crops",
+   "clip": "c38cd3f6-c74ca48b",
+   "frame": 360,
+   "t": 11.75,
+   "bbox": [
+    320.6,
+    311.4,
+    354.2,
+    351.4
+   ],
+   "raw_pred_first_run": "speed_limit_35",
+   "truth": "other",
+   "note": "NO TURN ON RED ARROW"
+  },
+  {
+   "sheet_index": 25,
+   "backend": "lisa_crops",
+   "clip": "b2064e61-2beadd45",
+   "frame": 960,
+   "t": 31.99,
+   "bbox": [
+    229.4,
+    320.3,
+    248.3,
+    343.2
+   ],
+   "raw_pred_first_run": "stop",
+   "truth": "do_not_enter",
+   "note": "DO NOT ENTER (night)"
+  },
+  {
+   "sheet_index": 26,
+   "backend": "lisa_crops",
+   "clip": "b9ecc316-529acd3c",
+   "frame": 780,
+   "t": 25.83,
+   "bbox": [
+    110.5,
+    286.9,
+    158.3,
+    336.6
+   ],
+   "raw_pred_first_run": "yield",
+   "truth": "yield",
+   "note": ""
+  },
+  {
+   "sheet_index": 27,
+   "backend": "lisa_full",
+   "clip": "b20e291a-6012d836",
+   "frame": 720,
+   "t": 23.89,
+   "bbox": [
+    663.3,
+    192.7,
+    681.6,
+    218.4
+   ],
+   "raw_pred_first_run": "pedestrian_crossing",
+   "truth": "school",
+   "note": "school S1-1 (pentagon, two children, AHEAD plate); review fix: was pedestrian_crossing, inconsistent with tiles 1/2/6"
+  },
+  {
+   "sheet_index": 28,
+   "backend": "lisa_full",
+   "clip": "b780088d-0bf9e946",
+   "frame": 240,
+   "t": 7.68,
+   "bbox": [
+    0.0,
+    111.8,
+    12.2,
+    175.3
+   ],
+   "raw_pred_first_run": "speed_limit_25",
+   "truth": "not_a_sign",
+   "note": "'PHARMACY' banner"
+  },
+  {
+   "sheet_index": 29,
+   "backend": "lisa_full",
+   "clip": "b2064e61-2beadd45",
+   "frame": 360,
+   "t": 11.97,
+   "bbox": [
+    845.9,
+    312.7,
+    881.2,
+    355.3
+   ],
+   "raw_pred_first_run": "speed_limit_35",
+   "truth": "not_a_sign",
+   "note": "'CASH' billboard"
+  },
+  {
+   "sheet_index": 30,
+   "backend": "lisa_full",
+   "clip": "b20e291a-6012d836",
+   "frame": 540,
+   "t": 17.88,
+   "bbox": [
+    1081.0,
+    287.2,
+    1110.5,
+    321.7
+   ],
+   "raw_pred_first_run": "stop",
+   "truth": "stop",
+   "note": ""
+  },
+  {
+   "sheet_index": 31,
+   "backend": "lisa_full",
+   "clip": "b9ecc316-529acd3c",
+   "frame": 1020,
+   "t": 33.84,
+   "bbox": [
+    1086.5,
+    253.3,
+    1125.7,
+    314.4
+   ],
+   "raw_pred_first_run": "yield",
+   "truth": "yield",
+   "note": ""
+  },
+  {
+   "sheet_index": 32,
+   "backend": "lisa_crops",
+   "clip": "b9ecc316-529acd3c",
+   "frame": 480,
+   "t": 15.83,
+   "bbox": [
+    399.3,
+    299.0,
+    418.3,
+    317.9
+   ],
+   "raw_pred_first_run": "pedestrian_crossing",
+   "truth": "pedestrian_crossing",
+   "note": ""
+  },
+  {
+   "sheet_index": 33,
+   "backend": "lisa_crops",
+   "clip": "b20e291a-6012d836",
+   "frame": 1020,
+   "t": 33.9,
+   "bbox": [
+    656.1,
+    135.8,
+    681.2,
+    166.4
+   ],
+   "raw_pred_first_run": "speed_limit_35",
+   "truth": "speed_limit_25",
+   "note": ""
+  },
+  {
+   "sheet_index": 34,
+   "backend": "lisa_crops",
+   "clip": "b20e291a-6012d836",
+   "frame": 420,
+   "t": 13.88,
+   "bbox": [
+    561.6,
+    251.0,
+    572.1,
+    263.6
+   ],
+   "raw_pred_first_run": "stop",
+   "truth": "school",
+   "note": "fluorescent school/ped sign"
+  },
+  {
+   "sheet_index": 35,
+   "backend": "lisa_full",
+   "clip": "b9ecc316-529acd3c",
+   "frame": 540,
+   "t": 17.83,
+   "bbox": [
+    828.8,
+    298.3,
+    859.7,
+    336.6
+   ],
+   "raw_pred_first_run": "pedestrian_crossing",
+   "truth": "pedestrian_crossing",
+   "note": ""
+  },
+  {
+   "sheet_index": 36,
+   "backend": "lisa_full",
+   "clip": "b23d2079-0c019d8e",
+   "frame": 0,
+   "t": 0.0,
+   "bbox": [
+    162.8,
+    100.1,
+    218.8,
+    174.6
+   ],
+   "raw_pred_first_run": "speed_limit_25",
+   "truth": "speed_limit_25",
+   "note": ""
+  },
+  {
+   "sheet_index": 37,
+   "backend": "lisa_full",
+   "clip": "c38cd3f6-c74ca48b",
+   "frame": 180,
+   "t": 5.75,
+   "bbox": [
+    339.1,
+    308.3,
+    366.4,
+    344.7
+   ],
+   "raw_pred_first_run": "speed_limit_35",
+   "truth": "other",
+   "note": "NO TURN ON RED ARROW"
+  },
+  {
+   "sheet_index": 38,
+   "backend": "lisa_full",
+   "clip": "bc07d865-f526e4d9",
+   "frame": 780,
+   "t": 25.92,
+   "bbox": [
+    1225.5,
+    413.1,
+    1245.9,
+    442.3
+   ],
+   "raw_pred_first_run": "stop",
+   "truth": "stop",
+   "note": ""
+  },
+  {
+   "sheet_index": 39,
+   "backend": "lisa_crops",
+   "clip": "b20e291a-6012d836",
+   "frame": 840,
+   "t": 27.89,
+   "bbox": [
+    656.1,
+    135.9,
+    681.1,
+    166.8
+   ],
+   "raw_pred_first_run": "speed_limit_35",
+   "truth": "speed_limit_25",
+   "note": ""
+  }
+ ],
+ "review_fix": "Reviewer (2026-09-25) re-inspected tiles 17 and 27 at 300 px: both are S1-1 school advance signs (pentagon, two children, AHEAD plate), the same sign type as tiles 1, 2 and 6, so truth changed pedestrian_crossing -> school."
+}

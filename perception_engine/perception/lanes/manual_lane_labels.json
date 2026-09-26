@@ -1,0 +1,362 @@
+{
+ "about": "Manual lane-state labels from visual inspection of outputs/lanes/visual_check/sheet_*.jpg (image + BDD100K GT lane lines + direct/alternative drivable). laneCount = travel lanes in the ego direction of travel (lanes occupied or partly hidden by vehicles count; parking lanes, shoulders, bike lanes and opposite-direction lanes do not). currentLane is numbered from the left. null = not decidable from one frame (intersection, parking lot, unmarked wide road, lane change / straddling, too dark). 'ambiguous' = a reasonable reader could disagree; 'acceptable' lists the other defensible [laneCount, currentLane] readings. Labelled by the lanes agent (Claude) on 2026-09-25; single annotator, no second opinion.",
+ "labels": [
+  {
+   "name": "b1f4491b-cf446195",
+   "laneCount": 4,
+   "currentLane": 3,
+   "ambiguous": false,
+   "acceptable": [
+    [
+     4,
+     3
+    ]
+   ],
+   "note": "highway; two lanes left, minivan lane right"
+  },
+  {
+   "name": "b1ff4656-0435391e",
+   "laneCount": null,
+   "currentLane": null,
+   "note": "wide intersection, no lane lines in the near field"
+  },
+  {
+   "name": "b20e291a-6012d836",
+   "laneCount": 2,
+   "currentLane": 2,
+   "ambiguous": true,
+   "acceptable": [
+    [
+     2,
+     2
+    ],
+    [
+     3,
+     2
+    ]
+   ],
+   "note": "wide parking/bike area right of the solid line"
+  },
+  {
+   "name": "b23adb0d-8a7aaced",
+   "laneCount": 1,
+   "currentLane": 1,
+   "ambiguous": true,
+   "acceptable": [
+    [
+     1,
+     1
+    ],
+    [
+     2,
+     1
+    ]
+   ],
+   "note": "night; yellow centre line left, parked cars right"
+  },
+  {
+   "name": "b204a5c1-064b0040",
+   "laneCount": 2,
+   "currentLane": 1,
+   "ambiguous": false,
+   "acceptable": [
+    [
+     2,
+     1
+    ]
+   ],
+   "note": "snow; double yellow left"
+  },
+  {
+   "name": "b1d968b9-ce42734f",
+   "laneCount": 2,
+   "currentLane": 1,
+   "ambiguous": true,
+   "acceptable": [
+    [
+     2,
+     1
+    ],
+    [
+     3,
+     1
+    ]
+   ],
+   "note": "hatched median left; right lane then parking lane"
+  },
+  {
+   "name": "b2064e61-2beadd45",
+   "laneCount": null,
+   "currentLane": null,
+   "note": "rainy night, no visible markings"
+  },
+  {
+   "name": "bc07d865-f526e4d9",
+   "laneCount": 2,
+   "currentLane": 1,
+   "ambiguous": false,
+   "acceptable": [
+    [
+     2,
+     1
+    ]
+   ],
+   "note": "concrete median left; right lane full of cars"
+  },
+  {
+   "name": "b780088d-0bf9e946",
+   "laneCount": 3,
+   "currentLane": 2,
+   "ambiguous": true,
+   "acceptable": [
+    [
+     3,
+     2
+    ],
+    [
+     2,
+     2
+    ]
+   ],
+   "note": "right lane may be parking"
+  },
+  {
+   "name": "c38cd3f6-c74ca48b",
+   "laneCount": null,
+   "currentLane": null,
+   "note": "inside an intersection with crosswalks"
+  },
+  {
+   "name": "b23d2079-0c019d8e",
+   "laneCount": 3,
+   "currentLane": 2,
+   "ambiguous": true,
+   "acceptable": [
+    [
+     3,
+     2
+    ],
+    [
+     4,
+     3
+    ]
+   ],
+   "note": "night; left area may hold two lanes"
+  },
+  {
+   "name": "b9ecc316-529acd3c",
+   "laneCount": 2,
+   "currentLane": 1,
+   "ambiguous": true,
+   "acceptable": [
+    [
+     2,
+     1
+    ],
+    [
+     1,
+     1
+    ]
+   ],
+   "note": "median left; truck on the right may be parked"
+  },
+  {
+   "name": "bf1af616-e750e7dd",
+   "laneCount": null,
+   "currentLane": null,
+   "note": "approaching a crosswalk / turn pocket"
+  },
+  {
+   "name": "c57906c2-9696bf52",
+   "laneCount": null,
+   "currentLane": null,
+   "note": "turning at a night intersection"
+  },
+  {
+   "name": "b4f360ca-78e0a64c",
+   "laneCount": null,
+   "currentLane": null,
+   "note": "camera straddles a dashed line"
+  },
+  {
+   "name": "c2c5fee5-a8360924",
+   "laneCount": null,
+   "currentLane": null,
+   "note": "traffic jam, lines hidden"
+  },
+  {
+   "name": "c6265010-8caa470f",
+   "laneCount": 3,
+   "currentLane": 2,
+   "ambiguous": true,
+   "acceptable": [
+    [
+     3,
+     2
+    ],
+    [
+     4,
+     2
+    ]
+   ],
+   "note": "night; right side may add a parking lane"
+  },
+  {
+   "name": "b7b3a558-45775f2e",
+   "laneCount": 2,
+   "currentLane": 2,
+   "ambiguous": false,
+   "acceptable": [
+    [
+     2,
+     2
+    ]
+   ],
+   "note": "night; lines far left belong to the other side"
+  },
+  {
+   "name": "b2d502aa-64d3e228",
+   "laneCount": null,
+   "currentLane": null,
+   "note": "bus lane / buses on the left, unclear"
+  },
+  {
+   "name": "b54a8089-aa62f142",
+   "laneCount": 1,
+   "currentLane": 1,
+   "ambiguous": false,
+   "acceptable": [
+    [
+     1,
+     1
+    ]
+   ],
+   "note": "single wide lane / ramp"
+  },
+  {
+   "name": "c5e8ab3b-6e92761c",
+   "laneCount": 2,
+   "currentLane": 1,
+   "ambiguous": true,
+   "acceptable": [
+    [
+     2,
+     1
+    ],
+    [
+     3,
+     1
+    ]
+   ],
+   "note": "curving highway, lane(s) right hidden by cars"
+  },
+  {
+   "name": "c94c8cef-e3a67ff5",
+   "laneCount": null,
+   "currentLane": null,
+   "note": "gas station"
+  },
+  {
+   "name": "ca068cb6-1418f2fb",
+   "laneCount": 3,
+   "currentLane": 2,
+   "ambiguous": true,
+   "acceptable": [
+    [
+     3,
+     2
+    ],
+    [
+     4,
+     2
+    ]
+   ],
+   "note": "far-right strip may be a shoulder"
+  },
+  {
+   "name": "c1de2ece-26433e37",
+   "laneCount": null,
+   "currentLane": null,
+   "note": "too dark"
+  },
+  {
+   "name": "fe1b92a1-faaaa1eb",
+   "laneCount": null,
+   "currentLane": null,
+   "note": "unmarked wide street at night"
+  },
+  {
+   "name": "bb49071c-4b99a704",
+   "laneCount": 1,
+   "currentLane": 1,
+   "ambiguous": false,
+   "acceptable": [
+    [
+     1,
+     1
+    ]
+   ],
+   "note": "one lane between oncoming traffic and parked cars"
+  },
+  {
+   "name": "c02fb811-03f28b56",
+   "laneCount": 3,
+   "currentLane": 1,
+   "ambiguous": true,
+   "acceptable": [
+    [
+     3,
+     1
+    ],
+    [
+     4,
+     1
+    ]
+   ],
+   "note": "highway under a bridge; 2-3 lanes to the right"
+  },
+  {
+   "name": "bc16f8e9-930d98ee",
+   "laneCount": 2,
+   "currentLane": 2,
+   "ambiguous": false,
+   "acceptable": [
+    [
+     2,
+     2
+    ]
+   ],
+   "note": "left lane next to parked cars"
+  },
+  {
+   "name": "bcc84a33-2b38c69f",
+   "laneCount": 2,
+   "currentLane": 2,
+   "ambiguous": true,
+   "acceptable": [
+    [
+     2,
+     2
+    ],
+    [
+     1,
+     1
+    ]
+   ],
+   "note": "taxi in the left lane"
+  },
+  {
+   "name": "c21defc7-61b5e22a",
+   "laneCount": 3,
+   "currentLane": 2,
+   "ambiguous": false,
+   "acceptable": [
+    [
+     3,
+     2
+    ]
+   ],
+   "note": "left lane (motorbike), right lane partly hidden"
+  }
+ ]
+}

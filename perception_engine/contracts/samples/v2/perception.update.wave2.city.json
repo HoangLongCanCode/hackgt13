@@ -1,0 +1,292 @@
+{
+  "type": "perception.update",
+  "schemaVersion": 2,
+  "wave": 2,
+  "seq": 88,
+  "sessionId": "video-b1ff4656-0435391e-20260926T082428-b382c0",
+  "frameIndex": 88,
+  "ptsSeconds": 2.8367,
+  "echo": null,
+  "serverTimeMs": 1790429071523,
+  "processingMs": 293.22,
+  "camera": {
+    "focalPx": 700.0,
+    "principalPoint": [
+      640.0,
+      360.0
+    ],
+    "horizonY": 376.2,
+    "cameraHeightMeters": 1.302
+  },
+  "distances": [
+    {
+      "id": 15,
+      "distanceMeters": 6.55,
+      "distanceMethod": "fused",
+      "distanceConfidence": 0.862,
+      "lateralMeters": -4.67
+    },
+    {
+      "id": 6,
+      "distanceMeters": 6.43,
+      "distanceMethod": "fused",
+      "distanceConfidence": 0.885,
+      "lateralMeters": 1.96
+    },
+    {
+      "id": 3,
+      "distanceMeters": 7.62,
+      "distanceMethod": "fused",
+      "distanceConfidence": 0.898,
+      "lateralMeters": -1.26
+    },
+    {
+      "id": 9,
+      "distanceMeters": 10.0,
+      "distanceMethod": "fused",
+      "distanceConfidence": 0.813,
+      "lateralMeters": 1.52
+    },
+    {
+      "id": 21,
+      "distanceMeters": 21.14,
+      "distanceMethod": "fused",
+      "distanceConfidence": 0.755,
+      "lateralMeters": -9.42
+    },
+    {
+      "id": 11,
+      "distanceMeters": 15.69,
+      "distanceMethod": "fused",
+      "distanceConfidence": 0.826,
+      "lateralMeters": 0.83
+    },
+    {
+      "id": 19,
+      "distanceMeters": 25.29,
+      "distanceMethod": "fused",
+      "distanceConfidence": 0.798,
+      "lateralMeters": -9.43
+    },
+    {
+      "id": 18,
+      "distanceMeters": 17.04,
+      "distanceMethod": "fused",
+      "distanceConfidence": 0.69,
+      "lateralMeters": 1.22
+    },
+    {
+      "id": 22,
+      "distanceMeters": 36.66,
+      "distanceMethod": "fused",
+      "distanceConfidence": 0.747,
+      "lateralMeters": -0.21
+    }
+  ],
+  "lanes": {
+    "currentLane": 1,
+    "laneCount": 1,
+    "laneBoundaries": [
+      [
+        [
+          -100.8,
+          718.0
+        ],
+        [
+          133.1,
+          598.0
+        ],
+        [
+          372.3,
+          478.0
+        ]
+      ],
+      [
+        [
+          1513.5,
+          718.0
+        ],
+        [
+          1482.4,
+          706.0
+        ],
+        [
+          1451.2,
+          694.0
+        ],
+        [
+          1420.1,
+          682.0
+        ],
+        [
+          1389.0,
+          670.0
+        ],
+        [
+          1357.8,
+          658.0
+        ],
+        [
+          1326.7,
+          646.0
+        ],
+        [
+          1295.5,
+          634.0
+        ],
+        [
+          1263.1,
+          622.0
+        ],
+        [
+          1229.9,
+          610.0
+        ],
+        [
+          1196.7,
+          598.0
+        ],
+        [
+          1163.5,
+          586.0
+        ],
+        [
+          1130.1,
+          574.0
+        ],
+        [
+          1096.8,
+          562.0
+        ],
+        [
+          1063.3,
+          550.0
+        ],
+        [
+          1029.8,
+          538.0
+        ],
+        [
+          996.2,
+          526.0
+        ],
+        [
+          962.6,
+          514.0
+        ]
+      ]
+    ],
+    "confidence": 0.274
+  },
+  "road": {
+    "drivableCoverage": 0.1467,
+    "egoPathPolygon": [
+      [
+        -100.8,
+        718.0
+      ],
+      [
+        133.1,
+        598.0
+      ],
+      [
+        388.2,
+        470.0
+      ],
+      [
+        866.6,
+        470.0
+      ],
+      [
+        908.1,
+        486.0
+      ],
+      [
+        909.6,
+        494.0
+      ],
+      [
+        951.3,
+        510.0
+      ],
+      [
+        1285.1,
+        630.0
+      ],
+      [
+        1513.5,
+        718.0
+      ]
+    ],
+    "horizonY": 363.6,
+    "vanishingPoint": [
+      590.8,
+      363.6
+    ],
+    "anchorPoints": [
+      {
+        "name": "ego_lane_center_near",
+        "xy": [
+          689.2,
+          664.8
+        ],
+        "groundXZ": [
+          0.21,
+          3.03
+        ],
+        "valid": true
+      },
+      {
+        "name": "ego_lane_center_mid",
+        "xy": [
+          656.4,
+          576.2
+        ],
+        "groundXZ": [
+          0.1,
+          4.29
+        ],
+        "valid": true
+      },
+      {
+        "name": "ego_lane_center_far",
+        "xy": [
+          632.7,
+          487.6
+        ],
+        "groundXZ": [
+          -0.08,
+          7.36
+        ],
+        "valid": true
+      }
+    ]
+  },
+  "signs": [
+    {
+      "id": 1000001,
+      "signClass": "pedestrianCrossing",
+      "bbox": [
+        1014.7,
+        194.3,
+        1096.0,
+        286.0
+      ],
+      "confidence": 0.44,
+      "distanceMeters": 9.3
+    }
+  ],
+  "blocks": [
+    "distance",
+    "depth",
+    "lanes",
+    "signs"
+  ],
+  "timingsMs": {
+    "distance": 69.17,
+    "depthNet": 52.18,
+    "lanes": 40.55,
+    "signs": 28.14,
+    "total": 137.87
+  }
+}

@@ -1,0 +1,176 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hackgt13.local/contracts/schemas/perception.stats.schema.json",
+  "title": "perception.stats (protocol v2)",
+  "description": "Server -> every client, ~1 Hz, over the last windowSeconds. wave*ProcessingMs = frame available on the server -> message built (includes queue wait); wave*ComputeMs = the lane's own model time. Additional fields may appear.",
+  "type": "object",
+  "required": [
+    "type",
+    "outputFps",
+    "wave1ProcessingMs",
+    "wave2ProcessingMs",
+    "framesIn",
+    "framesAnalysed",
+    "framesSkipped",
+    "clients"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "type": {
+      "const": "perception.stats"
+    },
+    "schemaVersion": {
+      "const": 2
+    },
+    "sessionId": {
+      "type": "string"
+    },
+    "serverTimeMs": {
+      "type": "integer",
+      "description": "Unix epoch ms on the laptop when the message was built."
+    },
+    "mode": {
+      "enum": [
+        "video",
+        "live",
+        "sim"
+      ]
+    },
+    "windowSeconds": {
+      "type": "number"
+    },
+    "outputFps": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "description": "wave-1 messages per second."
+    },
+    "wave2Fps": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "distanceFps": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "sourceFps": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "wave1ProcessingMs": {
+      "$ref": "#/$defs/pct"
+    },
+    "wave2ProcessingMs": {
+      "$ref": "#/$defs/pct"
+    },
+    "wave1ComputeMs": {
+      "$ref": "#/$defs/pct"
+    },
+    "wave2ComputeMs": {
+      "$ref": "#/$defs/pct"
+    },
+    "framesIn": {
+      "type": "integer",
+      "description": "Frames offered (clip frames / uplinked binary messages)."
+    },
+    "framesAnalysed": {
+      "type": "integer"
+    },
+    "framesSkipped": {
+      "type": "integer",
+      "description": "perception.skip messages sent."
+    },
+    "framesDropped": {
+      "type": "integer",
+      "description": "video / sim frames superseded before analysis."
+    },
+    "updates": {
+      "type": "integer"
+    },
+    "clients": {
+      "type": "integer"
+    },
+    "sendDropped": {
+      "type": "integer",
+      "description": "Frames replaced in a client's send slot (slow socket)."
+    },
+    "lookaheadSeconds": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "description": "sim: current look-ahead in media seconds."
+    },
+    "simLeadMs": {
+      "type": "object",
+      "properties": {
+        "p5": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "p50": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "description": "sim: wall-clock ms between a result being built and the tablet showing its frame (media lead / rate, against the extrapolated playback position)."
+    },
+    "simLateFraction": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "description": "sim: fraction of results built after their frame was shown."
+    },
+    "uplinkClient": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "clientId of the controller."
+    },
+    "navigationPackets": {
+      "type": "integer"
+    },
+    "uptimeSeconds": {
+      "type": [
+        "number",
+        "null"
+      ]
+    }
+  },
+  "$defs": {
+    "pct": {
+      "type": "object",
+      "required": [
+        "p50",
+        "p95"
+      ],
+      "properties": {
+        "p50": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "p95": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      }
+    }
+  }
+}

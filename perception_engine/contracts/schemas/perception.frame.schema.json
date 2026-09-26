@@ -1,0 +1,509 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hackgt13.local/contracts/schemas/perception.frame.schema.json",
+  "title": "perception.frame wave 1 (protocol v2)",
+  "description": "Server -> client, one per analysed frame (PROTOCOL_v2.md): detection + tracking + traffic-light state from the FAST lane, carrying the latest distances / lanes / road / signs of the slow lane (blockAges, distanceAgeMs), so a client that ignores wave 2 still works. All v1 fields (perception_frame.v1.schema.json) plus wave, echo and per-object distanceAgeMs. Produced by perception_engine/perception/realtime/wire.py to_wire().",
+  "type": "object",
+  "required": [
+    "type",
+    "schemaVersion",
+    "wave",
+    "seq",
+    "sessionId",
+    "source",
+    "frameIndex",
+    "ptsSeconds",
+    "serverTimeMs",
+    "processingMs",
+    "image",
+    "camera",
+    "objects",
+    "signs",
+    "lanes",
+    "road",
+    "blockAges",
+    "timingsMs",
+    "echo"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "type": {
+      "const": "perception.frame"
+    },
+    "schemaVersion": {
+      "const": 2
+    },
+    "wave": {
+      "const": 1
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Per session: video = source frame counter (gaps = frames dropped to stay realtime); sim = submitted frame counter; live = uplinked frame counter (gaps = skipped frames)."
+    },
+    "sessionId": {
+      "type": "string",
+      "description": "Changes on every new stream (new hello). Track ids are only comparable within one session."
+    },
+    "source": {
+      "$ref": "#/$defs/source"
+    },
+    "frameIndex": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "video / sim: frame index in the clip (decode order); live: = seq."
+    },
+    "ptsSeconds": {
+      "type": "number",
+      "description": "video / sim: container pts of the analysed clip frame (what the tablet's player reports). live: (captureTimeNs - first captureTimeNs of the session) / 1e9, i.e. real time on the tablet's capture clock."
+    },
+    "serverTimeMs": {
+      "type": "integer",
+      "description": "Unix epoch ms on the laptop when the message was built."
+    },
+    "processingMs": {
+      "type": "number",
+      "description": "Frame available on the server -> message built (includes queue wait, JPEG decode)."
+    },
+    "image": {
+      "$ref": "#/$defs/image"
+    },
+    "camera": {
+      "$ref": "#/$defs/camera"
+    },
+    "objects": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/perceivedObject"
+      }
+    },
+    "signs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/sign"
+      }
+    },
+    "lanes": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/lanes"
+        }
+      ]
+    },
+    "road": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/road"
+        }
+      ]
+    },
+    "blockAges": {
+      "type": "object",
+      "description": "Analysed frames since each block last produced the carried result (0 = this frame). Fast blocks (detection, tracking, lights) are always 0; slow blocks (distance, depth, lanes, road, signs) count fast frames since the frame they analysed.",
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "timingsMs": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "number"
+      }
+    },
+    "echo": {
+      "$ref": "#/$defs/echo"
+    }
+  },
+  "$defs": {
+    "point": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      },
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "bbox": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      },
+      "minItems": 4,
+      "maxItems": 4,
+      "description": "[x1, y1, x2, y2] px in the `image` space (the upright image; see image)."
+    },
+    "polyline": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/point"
+      }
+    },
+    "echo": {
+      "description": "Copied from the SDC1 uplink header of the analysed frame (live mode); null for video / sim. The client measures capture -> result latency on its own clock: nowNs - captureTimeNs.",
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "required": [
+            "frameId",
+            "captureTimeNs"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "frameId": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            "captureTimeNs": {
+              "type": "integer"
+            }
+          }
+        }
+      ]
+    },
+    "source": {
+      "type": "object",
+      "required": [
+        "kind",
+        "id"
+      ],
+      "additionalProperties": false,
+      "description": "video / sim: kind 'video', id = clip stem (videoId); live: kind 'camera', id = clientId.",
+      "properties": {
+        "kind": {
+          "enum": [
+            "video",
+            "camera",
+            "replay"
+          ]
+        },
+        "id": {
+          "type": "string"
+        }
+      }
+    },
+    "image": {
+      "type": "object",
+      "required": [
+        "width",
+        "height"
+      ],
+      "additionalProperties": false,
+      "description": "Coordinate space of every bbox / lane / road point: the upright analysed image (live: the uplinked JPEG after rotationDegrees, scaled down only if wider than the server's input.max_width, 1280; video / sim: the clip frame). Normalise by these to map onto the display.",
+      "properties": {
+        "width": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "camera": {
+      "type": "object",
+      "required": [
+        "focalPx",
+        "principalPoint"
+      ],
+      "additionalProperties": false,
+      "description": "Pinhole camera of the session in `image` pixels: client.hello intrinsics (live) or defaults (BDD 700 px focal at 1280 wide); horizonY / cameraHeightMeters are the depth block's current estimates (a client-given mountHeightMeters is used as is).",
+      "properties": {
+        "focalPx": {
+          "type": "number"
+        },
+        "principalPoint": {
+          "$ref": "#/$defs/point"
+        },
+        "horizonY": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "cameraHeightMeters": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      }
+    },
+    "sign": {
+      "type": "object",
+      "required": [
+        "signClass",
+        "bbox",
+        "confidence"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "Static-tracker id (>= staticIdOffset)."
+        },
+        "signClass": {
+          "type": "string",
+          "description": "camelCase, e.g. stop, yield, doNotEnter, speedLimit45, pedestrianCrossing"
+        },
+        "bbox": {
+          "$ref": "#/$defs/bbox"
+        },
+        "confidence": {
+          "type": "number"
+        },
+        "distanceMeters": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      }
+    },
+    "lanes": {
+      "type": "object",
+      "description": "Plan section 10. Lanes numbered 1..laneCount from the left.",
+      "required": [
+        "currentLane",
+        "laneCount",
+        "laneBoundaries",
+        "confidence"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "currentLane": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "laneCount": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "laneBoundaries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/polyline"
+          },
+          "description": "Left to right, <= 20 points each."
+        },
+        "confidence": {
+          "type": "number"
+        }
+      }
+    },
+    "road": {
+      "type": "object",
+      "description": "Plan section 13: where AR content can be anchored.",
+      "required": [
+        "drivableCoverage",
+        "egoPathPolygon",
+        "anchorPoints"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "drivableCoverage": {
+          "type": "number"
+        },
+        "egoPathPolygon": {
+          "$ref": "#/$defs/polyline"
+        },
+        "horizonY": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "vanishingPoint": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/point"
+            }
+          ]
+        },
+        "anchorPoints": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "xy",
+              "valid"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "e.g. ego_lane_center_near / _mid / _far, left_lane_center_mid"
+              },
+              "xy": {
+                "$ref": "#/$defs/point"
+              },
+              "groundXZ": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/$defs/point"
+                  }
+                ],
+                "description": "[lateral m (+ right), forward m] on the flat ground, from the session camera."
+              },
+              "valid": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      }
+    },
+    "perceivedObject": {
+      "type": "object",
+      "description": "One tracked object with everything known about it fused by track id (plan section 7 detection + 8 motion + 9 distance + 11 light state).",
+      "required": [
+        "id",
+        "class",
+        "bbox",
+        "confidence",
+        "ageFrames",
+        "distanceMeters",
+        "distanceMethod",
+        "distanceConfidence",
+        "lateralMeters",
+        "ttcSeconds",
+        "approaching",
+        "inEgoPath",
+        "lightState",
+        "lightConfidence",
+        "distanceAgeMs"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "integer",
+          "description": "Track id, stable across frames of one session (plan section 8). Traffic lights / signs: >= staticIdOffset (1,000,000)."
+        },
+        "class": {
+          "enum": [
+            "pedestrian",
+            "rider",
+            "car",
+            "truck",
+            "bus",
+            "train",
+            "motorcycle",
+            "bicycle",
+            "traffic light",
+            "traffic sign"
+          ]
+        },
+        "bbox": {
+          "$ref": "#/$defs/bbox"
+        },
+        "confidence": {
+          "type": "number"
+        },
+        "ageFrames": {
+          "type": "integer"
+        },
+        "distanceMeters": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "Forward distance from the camera (m). Vehicles / pedestrians have one whenever any estimate is possible: the latest slow-lane distance (fused, depth_model, ground_plane, width_prior) while it is younger than slow.max_distance_age_s, else a geometry-only one from this frame (geometry)."
+        },
+        "distanceMethod": {
+          "enum": [
+            "fused",
+            "depth_model",
+            "ground_plane",
+            "width_prior",
+            "geometry",
+            "size_prior",
+            null
+          ],
+          "description": "fused / depth_model / ground_plane / width_prior: slow lane (DA3 depth + geometry, per-track Kalman). geometry: fast lane, size prior + flat ground on this frame (confidence <= 0.5). size_prior: traffic lights / signs."
+        },
+        "distanceConfidence": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "lateralMeters": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "+ = right of the camera axis."
+        },
+        "distanceAgeMs": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "description": "Age of the carried distance: media ms between the frame it was measured on and this frame (0 = measured on this frame; null = no distance)."
+        },
+        "ttcSeconds": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "Time to collision from box scale change; null when not closing."
+        },
+        "approaching": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "inEgoPath": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Box bottom inside the ego VEHICLE's corridor: +-1.3 m on flat ground around the ego heading (the ego lane direction from the lanes block, else the camera axis), up to 80 m ahead. Falls back to the ego lane / static polygon when the camera height or horizon is unknown. null for traffic lights and signs."
+        },
+        "lightState": {
+          "enum": [
+            "RED",
+            "YELLOW",
+            "GREEN",
+            "UNKNOWN",
+            null
+          ],
+          "description": "Only for class 'traffic light'."
+        },
+        "lightConfidence": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      }
+    }
+  }
+}

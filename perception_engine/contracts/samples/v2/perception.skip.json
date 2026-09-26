@@ -1,0 +1,7 @@
+{
+  "type": "perception.skip",
+  "frameId": 0,
+  "reason": "badHeader",
+  "sessionId": "live-ws-probe-20260926T082610-991741",
+  "serverTimeMs": 1790429170078
+}

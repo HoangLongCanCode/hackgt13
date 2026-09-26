@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Laptop perception bridge: plain ws:// to the team laptop.
+  - USB: adb reverse tcp:8765 tcp:8765, then ws://127.0.0.1:8765/perception (loopback).
+  - Wi-Fi: ws://<laptop LAN IP>:8765/perception (private range, e.g. 192.168.x.x on a phone hotspot).
+
+  Android's network security config cannot express IP ranges (no 192.168.0.0/16 syntax), and the
+  laptop's LAN IP changes per network while the app takes the URL at runtime (intent extra
+  perception.url). So cleartext is permitted at the platform level here, and the real guard is in code:
+  PerceptionConfig.isAllowedUrl() accepts ws:// only for loopback, RFC 1918 private ranges,
+  link-local, 100.64/10 and *.local hosts (wss:// anywhere). The app makes no other network calls.
+  The explicit entries below document the USB / emulator hosts; keep them if base-config is ever
+  tightened to cleartextTrafficPermitted="false".
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">10.0.2.2</domain>
+    </domain-config>
+</network-security-config>

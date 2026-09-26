@@ -1,0 +1,490 @@
+{
+  "type": "perception.frame",
+  "schemaVersion": 2,
+  "seq": 457,
+  "sessionId": "video-b23adb0d-8a7aaced-20260926T082519-cf2415",
+  "source": {
+    "kind": "video",
+    "id": "b23adb0d-8a7aaced"
+  },
+  "frameIndex": 457,
+  "ptsSeconds": 15.0567,
+  "serverTimeMs": 1790429134404,
+  "processingMs": 97.51,
+  "image": {
+    "width": 1280,
+    "height": 720
+  },
+  "camera": {
+    "focalPx": 700.0,
+    "principalPoint": [
+      640.0,
+      360.0
+    ],
+    "horizonY": 198.6,
+    "cameraHeightMeters": 1.764
+  },
+  "objects": [
+    {
+      "id": 48,
+      "class": "car",
+      "bbox": [
+        432.0,
+        210.8,
+        536.0,
+        292.2
+      ],
+      "confidence": 0.798,
+      "ageFrames": 52,
+      "distanceMeters": 15.48,
+      "distanceMethod": "fused",
+      "distanceConfidence": 0.889,
+      "lateralMeters": -2.96,
+      "ttcSeconds": 0.97,
+      "approaching": false,
+      "inEgoPath": false,
+      "lightState": null,
+      "lightConfidence": null,
+      "distanceAgeMs": 233.3
+    },
+    {
+      "id": 50,
+      "class": "car",
+      "bbox": [
+        692.0,
+        212.2,
+        780.0,
+        278.2
+      ],
+      "confidence": 0.736,
+      "ageFrames": 49,
+      "distanceMeters": 17.03,
+      "distanceMethod": "fused",
+      "distanceConfidence": 0.89,
+      "lateralMeters": 2.04,
+      "ttcSeconds": 1.7,
+      "approaching": true,
+      "inEgoPath": false,
+      "lightState": null,
+      "lightConfidence": null,
+      "distanceAgeMs": 233.3
+    },
+    {
+      "id": 57,
+      "class": "car",
+      "bbox": [
+        993.3,
+        248.0,
+        1278.7,
+        547.3
+      ],
+      "confidence": 0.879,
+      "ageFrames": 31,
+      "distanceMeters": 4.31,
+      "distanceMethod": "depth_model",
+      "distanceConfidence": 0.6,
+      "lateralMeters": 2.62,
+      "ttcSeconds": null,
+      "approaching": null,
+      "inEgoPath": false,
+      "lightState": null,
+      "lightConfidence": null,
+      "distanceAgeMs": 233.3
+    },
+    {
+      "id": 60,
+      "class": "car",
+      "bbox": [
+        662.0,
+        201.7,
+        699.3,
+        237.0
+      ],
+      "confidence": 0.44,
+      "ageFrames": 27,
+      "distanceMeters": 35.94,
+      "distanceMethod": "fused",
+      "distanceConfidence": 0.88,
+      "lateralMeters": 1.93,
+      "ttcSeconds": 3.82,
+      "approaching": true,
+      "inEgoPath": false,
+      "lightState": null,
+      "lightConfidence": null,
+      "distanceAgeMs": 233.3
+    },
+    {
+      "id": 61,
+      "class": "car",
+      "bbox": [
+        322.0,
+        221.3,
+        396.0,
+        273.3
+      ],
+      "confidence": 0.6,
+      "ageFrames": 22,
+      "distanceMeters": 20.24,
+      "distanceMethod": "fused",
+      "distanceConfidence": 0.876,
+      "lateralMeters": -7.13,
+      "ttcSeconds": 2.51,
+      "approaching": false,
+      "inEgoPath": false,
+      "lightState": null,
+      "lightConfidence": null,
+      "distanceAgeMs": 233.3
+    },
+    {
+      "id": 63,
+      "class": "car",
+      "bbox": [
+        617.3,
+        192.7,
+        636.0,
+        209.3
+      ],
+      "confidence": 0.448,
+      "ageFrames": 15,
+      "distanceMeters": 68.82,
+      "distanceMethod": "fused",
+      "distanceConfidence": 0.866,
+      "lateralMeters": -1.31,
+      "ttcSeconds": null,
+      "approaching": false,
+      "inEgoPath": false,
+      "lightState": null,
+      "lightConfidence": null,
+      "distanceAgeMs": 233.3
+    },
+    {
+      "id": 64,
+      "class": "car",
+      "bbox": [
+        381.7,
+        205.8,
+        446.3,
+        265.2
+      ],
+      "confidence": 0.521,
+      "ageFrames": 10,
+      "distanceMeters": 24.47,
+      "distanceMethod": "fused",
+      "distanceConfidence": 0.855,
+      "lateralMeters": -6.99,
+      "ttcSeconds": 1.54,
+      "approaching": false,
+      "inEgoPath": false,
+      "lightState": null,
+      "lightConfidence": null,
+      "distanceAgeMs": 233.3
+    },
+    {
+      "id": 1000070,
+      "class": "traffic light",
+      "bbox": [
+        625.3,
+        155.0,
+        637.3,
+        172.5
+      ],
+      "confidence": 0.424,
+      "ageFrames": 48,
+      "distanceMeters": 21.0,
+      "distanceMethod": "size_prior",
+      "distanceConfidence": null,
+      "lateralMeters": -0.26,
+      "ttcSeconds": null,
+      "approaching": null,
+      "inEgoPath": null,
+      "lightState": "GREEN",
+      "lightConfidence": 0.988,
+      "distanceAgeMs": 0.0
+    },
+    {
+      "id": 1000073,
+      "class": "traffic sign",
+      "bbox": [
+        816.0,
+        98.5,
+        864.0,
+        141.2
+      ],
+      "confidence": 0.768,
+      "ageFrames": 34,
+      "distanceMeters": 15.8,
+      "distanceMethod": "size_prior",
+      "distanceConfidence": null,
+      "lateralMeters": 4.51,
+      "ttcSeconds": null,
+      "approaching": null,
+      "inEgoPath": null,
+      "lightState": null,
+      "lightConfidence": null,
+      "distanceAgeMs": 0.0
+    },
+    {
+      "id": 1000074,
+      "class": "traffic light",
+      "bbox": [
+        569.0,
+        153.8,
+        580.3,
+        170.5
+      ],
+      "confidence": 0.457,
+      "ageFrames": 34,
+      "distanceMeters": 22.2,
+      "distanceMethod": "size_prior",
+      "distanceConfidence": null,
+      "lateralMeters": -2.07,
+      "ttcSeconds": null,
+      "approaching": null,
+      "inEgoPath": null,
+      "lightState": "GREEN",
+      "lightConfidence": 0.988,
+      "distanceAgeMs": 0.0
+    },
+    {
+      "id": 1000076,
+      "class": "traffic light",
+      "bbox": [
+        680.0,
+        4.9,
+        701.3,
+        56.4
+      ],
+      "confidence": 0.585,
+      "ageFrames": 29,
+      "distanceMeters": 14.5,
+      "distanceMethod": "size_prior",
+      "distanceConfidence": null,
+      "lateralMeters": 1.05,
+      "ttcSeconds": null,
+      "approaching": null,
+      "inEgoPath": null,
+      "lightState": "GREEN",
+      "lightConfidence": 0.988,
+      "distanceAgeMs": 0.0
+    },
+    {
+      "id": 1000078,
+      "class": "traffic sign",
+      "bbox": [
+        816.0,
+        143.7,
+        856.0,
+        158.7
+      ],
+      "confidence": 0.646,
+      "ageFrames": 28,
+      "distanceMeters": null,
+      "distanceMethod": null,
+      "distanceConfidence": null,
+      "lateralMeters": null,
+      "ttcSeconds": null,
+      "approaching": null,
+      "inEgoPath": null,
+      "lightState": null,
+      "lightConfidence": null,
+      "distanceAgeMs": null
+    },
+    {
+      "id": 1000084,
+      "class": "traffic light",
+      "bbox": [
+        658.3,
+        8.5,
+        679.0,
+        56.0
+      ],
+      "confidence": 0.615,
+      "ageFrames": 18,
+      "distanceMeters": 15.8,
+      "distanceMethod": "size_prior",
+      "distanceConfidence": null,
+      "lateralMeters": 0.65,
+      "ttcSeconds": null,
+      "approaching": null,
+      "inEgoPath": null,
+      "lightState": "GREEN",
+      "lightConfidence": 0.98,
+      "distanceAgeMs": 0.0
+    }
+  ],
+  "signs": [
+    {
+      "id": 1000073,
+      "signClass": "pedestrianCrossing",
+      "bbox": [
+        816.0,
+        98.5,
+        864.0,
+        141.2
+      ],
+      "confidence": 0.665,
+      "distanceMeters": 15.8
+    }
+  ],
+  "lanes": {
+    "currentLane": 1,
+    "laneCount": 1,
+    "laneBoundaries": [
+      [
+        [
+          -301.7,
+          588.5
+        ],
+        [
+          -10.7,
+          360.5
+        ],
+        [
+          11.9,
+          348.5
+        ],
+        [
+          168.2,
+          288.5
+        ]
+      ],
+      [
+        [
+          -113.9,
+          700.5
+        ],
+        [
+          241.1,
+          472.5
+        ],
+        [
+          339.8,
+          412.5
+        ],
+        [
+          414.3,
+          364.5
+        ],
+        [
+          500.7,
+          304.5
+        ],
+        [
+          549.0,
+          268.5
+        ],
+        [
+          594.7,
+          232.5
+        ]
+      ]
+    ],
+    "confidence": 0.564
+  },
+  "road": {
+    "drivableCoverage": 0.0917,
+    "egoPathPolygon": [
+      [
+        -141.1,
+        718.0
+      ],
+      [
+        245.1,
+        470.0
+      ],
+      [
+        324.5,
+        422.0
+      ],
+      [
+        400.0,
+        374.0
+      ],
+      [
+        459.2,
+        334.0
+      ],
+      [
+        504.2,
+        302.0
+      ],
+      [
+        557.5,
+        262.0
+      ],
+      [
+        597.8,
+        230.0
+      ],
+      [
+        658.8,
+        230.0
+      ],
+      [
+        1744.2,
+        718.0
+      ]
+    ],
+    "horizonY": 196.8,
+    "vanishingPoint": null,
+    "anchorPoints": [
+      {
+        "name": "ego_lane_center_near",
+        "xy": [
+          775.5,
+          639.8
+        ],
+        "groundXZ": [
+          0.55,
+          2.53
+        ],
+        "valid": true
+      },
+      {
+        "name": "ego_lane_center_mid",
+        "xy": [
+          732.0,
+          509.5
+        ],
+        "groundXZ": [
+          0.53,
+          3.75
+        ],
+        "valid": true
+      },
+      {
+        "name": "ego_lane_center_far",
+        "xy": [
+          691.3,
+          379.2
+        ],
+        "groundXZ": [
+          0.51,
+          6.73
+        ],
+        "valid": true
+      }
+    ]
+  },
+  "blockAges": {
+    "detection": 0,
+    "tracking": 0,
+    "lights": 0,
+    "distance": 4,
+    "depth": 4,
+    "lanes": 4,
+    "signs": 6,
+    "road": 4
+  },
+  "timingsMs": {
+    "detect": 52.22,
+    "track": 15.25,
+    "trackStatic": 3.57,
+    "lights": 4.64,
+    "total": 75.74,
+    "queueWait": 21.31,
+    "fastLane": 75.82
+  },
+  "wave": 1,
+  "echo": null
+}

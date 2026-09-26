@@ -1,0 +1,15 @@
+{
+  "type": "client.hello",
+  "protocolVersion": 2,
+  "clientId": "ws-probe-sim",
+  "device": {
+    "manufacturer": "generic",
+    "model": "ws_probe",
+    "osVersion": "win32"
+  },
+  "mode": "sim",
+  "camera": null,
+  "sim": {
+    "videoId": "b1ff4656-0435391e"
+  }
+}
