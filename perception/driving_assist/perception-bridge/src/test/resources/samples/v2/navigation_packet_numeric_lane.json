@@ -1,1 +1,0 @@
-{"type":"navigation.packet","schemaVersion":2,"serverTimeMs":1790000003000,"routeState":{"action":"KEEP_LEFT","audio":"Keep left in 300 m.","ui":"LANE_ARROW","distanceMeters":300,"requiredLane":2,"turnDirection":"left"},"packet":{"packetType":"SPATIAL_NAVIGATION_PACKET"}}

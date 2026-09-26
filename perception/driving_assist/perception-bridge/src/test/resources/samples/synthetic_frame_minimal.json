@@ -1,1 +1,0 @@
-{"type":"perception.frame","schemaVersion":1,"seq":0,"sessionId":"s","source":{"kind":"camera","id":"glasses"},"frameIndex":0,"ptsSeconds":0.0,"serverTimeMs":1790380800000,"processingMs":20.5,"image":{"width":1280,"height":720},"camera":{"focalPx":1000,"principalPoint":[640,360]},"objects":[],"signs":[],"lanes":null,"road":null,"blockAges":{},"timingsMs":{}}

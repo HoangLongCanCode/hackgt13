@@ -1,1 +1,0 @@
-{"type":"perception.hello","schemaVersion":1,"sessionId":"synthetic-0001","source":{"kind":"video","id":"b1ff4656-0435391e"},"image":{"width":1280,"height":720},"fps":30.0,"models":[{"block":"detection","name":"bdd-yolo26s@960","licence":"AGPL-3.0"}],"schedule":{"depth":3,"lanes":2},"someFutureField":{"x":1}}

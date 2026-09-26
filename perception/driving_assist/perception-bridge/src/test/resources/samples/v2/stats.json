@@ -1,1 +1,0 @@
-{ "type": "perception.stats", "outputFps": 14.6, "wave1ProcessingMs": {"p50": 24.1, "p95": 31.0}, "wave2ProcessingMs": {"p50": 58.0, "p95": 72.5}, "framesIn": 900, "framesAnalysed": 452, "framesSkipped": 448, "clients": 1 }

@@ -1,9 +1,0 @@
-{"type":"perception.frame","schemaVersion":2,"wave":1,"seq":301,"sessionId":"live-7f3a","source":{"kind":"camera","id":"tab-s9-01"},"frameIndex":301,"ptsSeconds":10.034,"serverTimeMs":1790000000000,"processingMs":24.6,
- "echo":{"frameId":1234,"captureTimeNs":123456789012},
- "image":{"width":960,"height":540},"camera":{"focalPx":745.2,"principalPoint":[480.0,270.0],"horizonY":262.0,"cameraHeightMeters":1.25},
- "objects":[
-  {"id":17,"class":"car","bbox":[430.1,250.3,540.8,331.0],"confidence":0.91,"ageFrames":88,"distanceMeters":18.4,"distanceMethod":"fused","distanceConfidence":0.8,"lateralMeters":-0.3,"ttcSeconds":null,"approaching":false,"inEgoPath":true,"lightState":null,"lightConfidence":null,"distanceAgeMs":66.0},
-  {"id":42,"class":"traffic light","bbox":[610.0,120.0,622.0,150.0],"confidence":0.8,"ageFrames":40,"distanceMeters":null,"distanceMethod":null,"distanceConfidence":null,"lateralMeters":null,"ttcSeconds":null,"approaching":null,"inEgoPath":false,"lightState":"RED","lightConfidence":0.93,"distanceAgeMs":null}
- ],
- "signs":[],"lanes":{"currentLane":2,"laneCount":3,"laneBoundaries":[[[300.0,540.0],[455.0,300.0]],[[660.0,540.0],[505.0,300.0]]],"confidence":0.7},"road":null,
- "blockAges":{"depth":2,"lanes":2},"timingsMs":{"detection":11.2,"tracking":4.1,"lights":6.9}}

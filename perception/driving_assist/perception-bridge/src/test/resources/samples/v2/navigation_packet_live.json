@@ -1,8 +1,0 @@
-{"type":"navigation.packet","schemaVersion":2,"serverTimeMs":1790000001000,"ptsSeconds":null,"tripTimestampMs":1790000000950,
- "routeState":{"action":"EXIT_HIGHWAY","audio":"Take the exit in 400 m.","ui":"EXIT_MARKER","distanceMeters":400.0,"offRoute":false,"etaSeconds":null,"remainingDistanceMeters":5200,"requiredLane":"right","turnDirection":"exit","roadName":null},
- "packet":{"packetType":"SPATIAL_NAVIGATION_PACKET","tripId":"live-01","routeId":"route_7",
-  "progress":{"currentLocation":{"lat":33.78,"lng":-84.39},"heading":10.0,"speedMps":24.5,"routeIndex":12,"distanceTraveledMeters":3100,"remainingDistanceMeters":5200,"etaSeconds":null,"offRoute":false},
-  "activeManeuver":{"eventId":"evt_5","type":"EXIT_HIGHWAY","distanceMeters":3500,"exitNumber":"250","requiredLane":"right"},
-  "upcomingManeuvers":[],"spatialInstructions":[],"audioInstructions":[],
-  "routeSemantics":{"highwayName":"I-75","exitNumber":"250","requiredLane":"right","turnDirection":"exit"},
-  "handoffHints":{"confidence":0.95,"displayPriority":1,"staleAfterMs":5000}}}
