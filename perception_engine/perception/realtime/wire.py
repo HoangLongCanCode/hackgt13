@@ -39,6 +39,9 @@ MAX_POLYLINE_POINTS = 20
 OBJECT_CLASSES = set(BDD_CLASSES)
 NON_PATH_CLASSES = {"traffic light", "traffic sign"}   # never "in the ego path"
 LIGHT_STATES = {"RED", "YELLOW", "GREEN", "UNKNOWN"}
+BOUNDARY_COLORS = {"yellow", "white"}       # lanes.boundaryColors (anything else -> "unknown")
+BOUNDARY_STYLES = {"solid", "dashed"}       # lanes.boundaryStyles (anything else -> "unknown")
+MAX_DRIVABLE_POLYGON_POINTS = 32            # road.drivablePolygon (v2)
 # Static fallback ego corridor when no ego-path polygon exists (same as perception.tracking.motion.MotionConfig):
 # normalised (x/W, y/H): bottom 20..80 % of width, apex at 40 % height.
 STATIC_CORRIDOR_NORM = ((0.20, 1.0), (0.80, 1.0), (0.54, 0.40), (0.46, 0.40))
@@ -312,18 +315,32 @@ def camera_to_wire(cam_in: Optional[dict[str, Any]], width: int, height: int) ->
     }
 
 
-def lanes_to_wire(ls: Any) -> Optional[dict[str, Any]]:
+def lanes_to_wire(ls: Any, v2: bool = True) -> Optional[dict[str, Any]]:
+    """v2 adds boundaryColors / boundaryStyles (parallel to laneBoundaries, index i describes laneBoundaries[i])
+    when the lanes block has per-line metadata of the same length; v1 never carries them."""
     if ls is None:
         return None
-    return {
+    bounds = list(ls.laneBoundaries or [])
+    colors, styles = getattr(ls, "boundaryColors", None), getattr(ls, "boundaryStyles", None)
+    keep = [i for i, b in enumerate(bounds) if len(b) >= 2]
+    out = {
         "currentLane": None if ls.currentLane is None else int(ls.currentLane),
         "laneCount": None if ls.laneCount is None else int(ls.laneCount),
-        "laneBoundaries": [decimate(b) for b in (ls.laneBoundaries or []) if len(b) >= 2],
+        "laneBoundaries": [decimate(bounds[i]) for i in keep],
         "confidence": _r(ls.confidence, 3) or 0.0,
     }
+    if v2:
+        for key, vals, allowed in (("boundaryColors", colors, BOUNDARY_COLORS),
+                                   ("boundaryStyles", styles, BOUNDARY_STYLES)):
+            if vals is not None and len(vals) == len(bounds):
+                out[key] = [vals[i] if vals[i] in allowed else "unknown" for i in keep]
+    return out
 
 
-def road_to_wire(rg: Any, camera: dict[str, Any], width: int, height: int) -> Optional[dict[str, Any]]:
+def road_to_wire(rg: Any, camera: dict[str, Any], width: int, height: int,
+                 v2: bool = True) -> Optional[dict[str, Any]]:
+    """v2 adds drivablePolygon (outline of the visible drivable road, <= 32 points, [] when unknown); v1 never
+    carries it."""
     if rg is None:
         return None
     yh = rg.horizonY if rg.horizonY is not None else camera.get("horizonY")
@@ -342,13 +359,18 @@ def road_to_wire(rg: Any, camera: dict[str, Any], width: int, height: int) -> Op
         anchors.append({"name": str(a.get("name", "")), "xy": _pt(xy, 1),
                         "groundXZ": None if gxz is None else [_r(gxz[0], 2), _r(gxz[1], 2)],
                         "valid": bool(valid)})
-    return {
+    out = {
         "drivableCoverage": _r(rg.drivableCoverage, 4) or 0.0,
         "egoPathPolygon": decimate(rg.egoPathPolygon or [], closed=True),
         "horizonY": _r(rg.horizonY, 1),
         "vanishingPoint": None if not rg.vanishingPoint else _pt(rg.vanishingPoint, 1),
         "anchorPoints": anchors,
     }
+    if v2:
+        pts = [p for p in (getattr(rg, "drivablePolygon", None) or [])
+               if len(p) >= 2 and _r(p[0], 1) is not None and _r(p[1], 1) is not None]
+        out["drivablePolygon"] = decimate(pts, MAX_DRIVABLE_POLYGON_POINTS, closed=True) if len(pts) >= 3 else []
+    return out
 
 
 def signs_to_wire(signs: Iterable[Any]) -> list[dict[str, Any]]:
@@ -461,8 +483,8 @@ def to_wire(result: FrameResult, meta: dict[str, Any], schema_version: int = SCH
         "camera": camera,
         "objects": objects,
         "signs": signs_to_wire(result.trafficSigns),
-        "lanes": lanes_to_wire(result.lanes),
-        "road": road_to_wire(result.road, camera, W, H),
+        "lanes": lanes_to_wire(result.lanes, v2),
+        "road": road_to_wire(result.road, camera, W, H, v2),
         "blockAges": {str(k): int(v) for k, v in (meta.get("blockAges") or {}).items() if v is not None},
         "timingsMs": _timings(result.timingsMs, meta.get("timingsMs")),
     }

@@ -262,6 +262,13 @@
             "string",
             "null"
           ]
+        },
+        "destination": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "live: the destination query the route is built for (--nav-destination or the last client.destination); null in sim or before one is set."
         }
       },
       "description": "phase1 route-engine relay state; navigation.packet messages follow when available."

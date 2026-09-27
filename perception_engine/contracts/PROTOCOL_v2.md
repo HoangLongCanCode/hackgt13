@@ -2,7 +2,7 @@
 
 Status: source of truth for the bridge. Supersedes the v1 message list in `README.md` (v1 `perception.frame` fields are kept; v2 adds fields and messages).
 
-Target client: Samsung Galaxy Tab S9 (any Samsung Android device works the same), Kotlin app written by the AR developer. The tablet does all I/O (camera, display, audio, GPS/navigation, Driving Context); the laptop (RTX 5060) only runs the models.
+Target client: Samsung Galaxy Tab S9 (any Samsung Android device works the same), the Kotlin tablet app in `frontend/` (through the shared `PerceptionBridge`). The tablet does all I/O (camera, display, audio, GPS/navigation, Driving Context); the laptop (RTX 5060) only runs the models.
 
 ## Transport
 
@@ -65,7 +65,7 @@ Target client: Samsung Galaxy Tab S9 (any Samsung Android device works the same)
 | 20 | uint16 | rotationDegrees (0/90/180/270: rotate the JPEG clockwise by this to make it upright) |
 | 22 | uint16 | reserved (0) |
 
-Python: `struct.Struct("<4sHHIqHH")`. Recommended: 960×540, JPEG quality ~80 (≈50–80 KB).
+Python: `struct.Struct("<4sHHIqHH")`. Recommended: 960×540, JPEG quality ~80 (≈50–80 KB). An upright frame wider than 1280 px (`input.max_width` in `config_realtime.yaml`) is scaled down on the server, keeping its aspect, and the `client.hello` intrinsics are scaled with it; `image.width/height` and all coordinates then refer to the scaled image.
 
 A binary message of 24 bytes or more is always answered, even with a wrong magic: the server reads `frameId` at offset 8 and answers `perception.skip badHeader` (bad magic / headerVersion / rotation) or `decodeError` (empty or undecodable JPEG). A message shorter than 24 bytes cannot be attributed to a frame: it gets only a rate-limited `perception.error badMessage`, and the client's credit comes back by its timeout.
 
@@ -87,7 +87,9 @@ All v1 fields (see `perception_frame.v1.schema.json`), with `schemaVersion: 2` p
 - per object: `"distanceAgeMs"`: age of the carried-forward distance (null if none). Wave 1 includes the latest known distance/lanes/road so a client that ignores wave 2 still works.
 - Coordinates (`bbox`, lanes, road, `image.width/height`) are in the **upright** image, i.e. after applying the uplink `rotationDegrees`; `client.hello.camera` intrinsics describe that upright image too.
 - `lanes` and `road` are always present (null when unknown). `timingsMs` may include `queueWait`, `jpegDecode`, `fastLane`, `geometryDistance`.
-- `distanceMethod`: `fused` / `depth_model` (slow lane, carried with `distanceAgeMs`); `geometry` (fast-lane size prior + flat ground on this very frame, age 0, confidence ≤ 0.5, used when no slow-lane distance younger than 1 s exists); `size_prior` (traffic lights and signs).
+- `lanes.boundaryColors` (`"yellow"` | `"white"` | `"unknown"`) and `lanes.boundaryStyles` (`"solid"` | `"dashed"` | `"unknown"`), optional (same in wave 2): arrays parallel to `laneBoundaries`, same order and length, index i describes `laneBoundaries[i]`. Absent when the lanes block has no per-line metadata (v1 never carries them). They come from a heuristic on the image under each line (share of yellow pixels, gaps along the line) and can be wrong, e.g. yellow curb paint on the right. In the US a yellow line is the left edge of the ego direction of travel, so lines left of a yellow line left of the car belong to oncoming traffic.
+- `road.drivablePolygon` (optional, v2 only, same in wave 2): outline of the visible drivable road as one closed polygon of `[x, y]` px, at most 32 points, `[]` when unknown. It is the largest region of the lane model's drivable mask (the lane and stop lines that split it into one region per lane are closed first), outer contour only, simplified. It excludes the dashboard, hood and A-pillars (and road seen past a pillar through a side window), so the tablet keeps AR content inside it. A car on the road leaves a notch where it cuts the road's top edge; a car with road all around it is inside.
+- `distanceMethod`: `fused` / `depth_model` / `ground_plane` / `width_prior` (slow lane: the fusion of the depth network, flat-ground range and class size prior, or the one component that was available; carried with `distanceAgeMs`); `geometry` (fast-lane size prior + flat ground on this very frame, age 0, confidence ≤ 0.5, used when no slow-lane distance younger than 1 s exists); `size_prior` (traffic lights and signs).
 - `inEgoPath` (vehicles, pedestrians): the box bottom (at 1/4, 1/2 or 3/4 of its width) lies inside the ego **vehicle's** corridor. That corridor is ±1.3 m on flat ground around the ego heading (the ego lane direction from the lanes block's `ego_lane_center_near/far` anchors, clamped to ±8°; the camera axis without them), up to 80 m ahead. The server falls back to the ego-lane / static polygon only when the camera height or horizon is unknown. (The ego-lane polygon alone included parking lanes and ended about 5 m ahead, which made parked cars "leads"; fixed 2026-09-26.) The Kotlin Driving Context picks the lead vehicle and pedestrians-in-path from this flag.
 - `live`: `ptsSeconds` must advance in real time with the tablet's capture clock: `(captureTimeNs − first captureTimeNs of the session) / 1e9` (the client's relative speed / TTC / box-velocity maths runs on `ptsSeconds`).
 
@@ -97,14 +99,16 @@ All v1 fields (see `perception_frame.v1.schema.json`), with `schemaVersion: 2` p
   "seq": 4711, "frameIndex": 301, "ptsSeconds": 10.03, "echo": { "frameId": 1234, "captureTimeNs": 123 } ,
   "serverTimeMs": 1790000000000, "processingMs": 61.2,
   "distances": [ { "id": 17, "distanceMeters": 18.4, "distanceMethod": "fused", "distanceConfidence": 0.8, "lateralMeters": -0.3 } ],
-  "lanes": { "currentLane": 2, "laneCount": 3, "laneBoundaries": [[[x, y], "..."]], "confidence": 0.7 },
-  "road": { "drivableCoverage": 0.31, "egoPathPolygon": [[x, y]], "horizonY": 262.0, "vanishingPoint": [640, 262], "anchorPoints": [] },
-  "signs": [], "blocks": ["depth", "lanes"], "timingsMs": { "depth": 44.1, "lanes": 14.9 } }
+  "lanes": { "currentLane": 2, "laneCount": 3, "laneBoundaries": [[[x, y], "..."]], "confidence": 0.7,
+             "boundaryColors": ["yellow", "..."], "boundaryStyles": ["dashed", "..."] },
+  "road": { "drivableCoverage": 0.31, "egoPathPolygon": [[x, y]], "horizonY": 262.0, "vanishingPoint": [640, 262], "anchorPoints": [],
+            "drivablePolygon": [[x, y], "..."] },
+  "signs": [], "blocks": ["distance", "depth", "lanes"], "timingsMs": { "distance": 58.3, "depthNet": 44.1, "lanes": 14.9, "total": 75.2 } }
 ```
-`seq`/`frameIndex`/`ptsSeconds`/`echo` identify the frame the slow blocks analysed (usually a few frames older than the latest wave 1). Fields for blocks that did not run are omitted. Track ids match wave-1 `objects[].id`. Also carries `sessionId` and `camera`; `blocks` ⊆ `distance`, `depth`, `lanes`, `segmentation`, `signs`.
+`seq`/`frameIndex`/`ptsSeconds`/`echo` identify the frame the slow blocks analysed (usually a few frames older than the latest wave 1). Fields for blocks that did not run are omitted. Track ids match wave-1 `objects[].id`. Also carries `sessionId` and `camera`; `blocks` ⊆ `distance`, `depth`, `lanes`, `segmentation`, `signs`. `distance` is in every update while the distance block is enabled (the default: the per-track distance update runs every slow cycle); `depth` only when the depth network itself ran. `timingsMs` keys are per block (`distance`, `depthNet` for the network alone, `lanes`, `signs`, ...) plus `total`.
 
 ### `perception.skip` (live) — a frame will not be analysed (superseded by a newer one)
-`{ "type": "perception.skip", "frameId": 1233, "reason": "superseded" }` — reasons: `superseded`, `decodeError`, `badHeader`, `notAccepted`, `sessionReset`; every reason returns the frame's credit. Also carries `sessionId` and `serverTimeMs`. `superseded` is also sent when a finished result is replaced in the client's 1-slot send queue, and `notAccepted` when the fast lane failed on that frame (plus a `perception.error internal`), so the exactly-one-answer rule holds end to end.
+`{ "type": "perception.skip", "frameId": 1233, "reason": "superseded" }` — reasons: `superseded`, `decodeError`, `badHeader`, `notAccepted`, `sessionReset`; every reason returns the frame's credit. Also carries `sessionId` and `serverTimeMs`. `superseded` is also sent when a finished result is replaced in the client's 1-slot send queue. `notAccepted` is sent when the server does not accept live (plus `perception.error modeNotAvailable`), to the controller of a sim session (plus `badMessage`: send a live `client.hello` first), to a client that is not the controller (plus `notUplinkClient`), after a takeover (see Sessions), and when the fast lane failed on that frame (plus a `perception.error internal`), so the exactly-one-answer rule holds end to end.
 
 ### `perception.stats` (~1 Hz)
 `{ "type": "perception.stats", "outputFps", "wave1ProcessingMs": {"p50","p95"}, "wave2ProcessingMs": {"p50","p95"}, "framesIn", "framesAnalysed", "framesSkipped", "clients" }` plus diagnostics (optional for clients): `schemaVersion`, `sessionId`, `serverTimeMs`, `mode`, `windowSeconds`, `wave2Fps`, `distanceFps`, `sourceFps`, `wave1ComputeMs` / `wave2ComputeMs` (`{p50, p95}`, compute only, without queueing), `updates`, `sendDropped`, `framesDropped`, `lookaheadSeconds`, `simLeadMs` (`{p5, p50}`, wall ms), `simLateFraction`, `uplinkClient`, `navigationPackets`, `uptimeSeconds`.
@@ -124,6 +128,35 @@ The phase1 Node.js navigation engine computes `SpatialNavigationPacket`s. It is 
 { "type": "client.trip_state", "timestampMs": 1790000000123, "location": { "lat": 33.7756, "lng": -84.3963 }, "heading": 91.2, "speedMps": 6.1, "accuracyMeters": 4.1 }
 ```
 
+### `client.destination` (live; when the user picks where to go)
+```json
+{ "type": "client.destination", "query": "Piedmont Park, Atlanta" }
+```
+A free-text place or address (1-200 characters). The server's phase1 provider (`--nav-provider mock|google`; Google =
+Geocoding API + Routes API) resolves it and builds the route from the next `client.trip_state` position; until then no
+packets change. `perception.hello` `navigation.destination` echoes the current target. Same sender rule as
+`client.trip_state`; without live navigation (`--nav-live`, `--nav-destination` or `--nav-route`) the answer is one
+`perception.error modeNotAvailable`. The Kotlin app sends it when the destination in its settings differs from the
+hello's.
+
+### `client.place_search` → `navigation.places` (live; the tablet's destination search)
+```json
+{ "type": "client.place_search", "requestId": "s1", "query": "coffee", "near": { "lat": 33.7756, "lng": -84.3963 } }
+{ "type": "navigation.places", "schemaVersion": 2, "serverTimeMs": 1790000000500, "requestId": "s1", "query": "coffee", "provider": "google",
+  "places": [ { "placeId": "ChIJ...", "label": "Foxtail Coffee - Society Atlanta", "address": "811 Peachtree St NE ...", "location": { "lat": 33.7766, "lng": -84.3838 }, "distanceMeters": 1162.0 } ],
+  "error": null }
+```
+Free-text search for a destination (a name, a kind of place, an address), biased around `near` (the tablet's latest
+GPS fix). The phase1 provider answers: Google = Places API Text Search (falling back to the Geocoding API when Places
+is not enabled), mock = made-up places near `near`. The answer goes to the sender only, echoes `requestId`, lists at
+most 8 places best first; on failure `places` is empty and `error` says why (never a key). At most 2 searches per
+second per client are answered (the rest get `error` "rate limited"). Sent on submit, not per keystroke. Same sender
+rule and `modeNotAvailable` as `client.destination`. Picking a result sends `client.destination` with its `location`
+(and `placeId`), so the laptop routes to exactly that place without geocoding the label again:
+```json
+{ "type": "client.destination", "query": "Foxtail Coffee - Society Atlanta", "placeId": "ChIJ...", "location": { "lat": 33.7766, "lng": -84.3838 } }
+```
+
 ### `navigation.packet` (server → client; sim: for the current playback position, ~2 Hz; live: after each `client.trip_state`)
 ```json
 { "type": "navigation.packet", "schemaVersion": 2, "serverTimeMs": 1790000000000,
@@ -131,14 +164,19 @@ The phase1 Node.js navigation engine computes `SpatialNavigationPacket`s. It is 
   "routeState": { "action": "TURN_RIGHT", "audio": "Turn right in 120 m.", "ui": "TURN_ARROW",
                   "distanceMeters": 120, "offRoute": false, "etaSeconds": 95, "remainingDistanceMeters": 840,
                   "requiredLane": null, "turnDirection": "right", "roadName": "North Ave" },
-  "packet": { "packetType": "SPATIAL_NAVIGATION_PACKET", "...": "verbatim phase1 SpatialNavigationPacket" } }
+  "packet": { "packetType": "SPATIAL_NAVIGATION_PACKET", "...": "verbatim phase1 SpatialNavigationPacket" },
+  "speedLimit": { "valueMph": 35, "source": "osm", "roadName": "North Avenue Northwest", "wayId": 123456, "queriedAtMs": 1789999998000 } }
 ```
-- `routeState.action` = phase1 `activeManeuver.type` (`GO_STRAIGHT`, `TURN_LEFT`, `TURN_RIGHT`, `KEEP_LEFT`, `KEEP_RIGHT`, `MERGE`, `EXIT_HIGHWAY`, `ARRIVE`, `START_ROUTE`); `audio` = `audioInstructions[0].content`; `ui` = `spatialInstructions[0].type`; these map 1:1 onto the AR app's `RouteState(time, action, audio, ui)`. `ptsSeconds` is null in live mode.
+- `routeState.action` = phase1 `activeManeuver.type` (`GO_STRAIGHT`, `TURN_LEFT`, `TURN_RIGHT`, `KEEP_LEFT`, `KEEP_RIGHT`, `MERGE`, `EXIT_HIGHWAY`, `ARRIVE`, `START_ROUTE`); `audio` = `audioInstructions[0].content`; `ui` = `spatialInstructions[0].type`; the tablet app reads these (through the bridge's `NavigationMapper`) into its route guide without route logic of its own. `ptsSeconds` is null in live mode.
 - Sim: a phase1 session folder (`session_manifest.json`, `route.json`, `trip_state.jsonl`; e.g. `perception_engine/nav/demo_sessions/<clip>/`) provides the timeline. The clip itself is not in the folder: the manifest names it (`videoFile`, `videoId`) and the relay never opens it. Media time t maps to `trip_state[0].timestampMs + 1000·t`, or to `videoStartTimestampMs + 1000·t` when the manifest sets that optional field (for recordings where the video and the GPS log started at different times).
+- Sim session per clip: a clip recorded with its session (the folder holds the clip, e.g. `data/sim_videos/real_009/video.mp4`, next to the three session files and a manifest `videoFile` naming it) always navigates from that session, with or without `--nav-session`; the server switches the relay when the controller's `client.hello` / `client.playback` names another clip, and never forwards a packet of the previous session after the switch. `--nav-session DIR` serves clips without their own (BDD100K, `nav/demo_sessions/<id>/`); when its manifest `videoId` is another clip it is kept, but `perception.hello.navigation.error` reads "navigation session is for real_010, the clip is real_009" (with `available` still true) and the controller gets one `perception.error internal` with that text. A clip with no session and no `--nav-session` reports `navigation.mode: "off"`. The session in use is in the free-form `perception.hello.server.navigationSession`: `{ "id": "real_009", "videoId": "real_009", "source": "clip" | "--nav-session" }` or null.
 - When phase1 has no active maneuver, `routeState` defaults to `action: "GO_STRAIGHT"`, `audio: ""`, `ui: "DISTANCE_LABEL"`, `distanceMeters: null`. `requiredLane` is free text (`"right"`, `"2"`, `"2-3"`); clients also accept a JSON number.
 - `client.trip_state`: `heading` and `speedMps` are numbers (send 0 when unknown, like the android-collector; the server also reads null as 0). Only the session controller, or a client whose `client.hello` has `navigation.mode: "live"`, may feed live navigation; others get `perception.error notUplinkClient`. A sample without a numeric `timestampMs` and `location {lat, lng}` gets a rate-limited `perception.error badMessage`. A `client.trip_state` sent while live navigation is not running gets one `perception.error modeNotAvailable`. A newly connected client immediately receives the last `navigation.packet`.
 - Relay health: `perception.hello.navigation.available` turns false (with the reason in `error`) after 3 relay calls in a row produced no packet (phase1 failing); the server then re-announces the hello and sends one `perception.error internal`. The next packet sets it back to true (hello again). A crashed Node child is restarted on the next call and is not reported.
 - `client.hello` may carry `"navigation": { "mode": "sim" | "live" | "off" }` as a hint; the server's CLI flags decide what is actually running (reported in `perception.hello.navigation`).
+- `speedLimit` (optional, top level; sample `navigation.packet.speed_limit.json`): the posted limit of the road at `packet.progress.currentLocation`, from OpenStreetMap `maxspeed` (the route provider carries no posted limits). **Absent** unless the laptop runs with `--speed-limits osm` (default `off`); **null** when it is on but no current value is known. The value is the nearest car road within 25 m of the car; roads within 8 m of the nearest one tie and are ranked by the name of the route step the car is on (the step before the active maneuver; `routeState.roadName` is the road of the next maneuver), then by the heading (used while moving >= 1 m/s with a non-zero heading, 0 meaning unknown; against the way's direction only on one-way roads). Only that road's own `maxspeed` counts, and only as `"N mph"` with N in 5..85 (a unitless value is km/h; `signals`, `none`, `US:urban` are not a number): a nearest road without one gives null, never a parallel road's value. `maxspeed:forward` / `:backward` are used when the heading tells the direction. No value comes from Overpass data older than 60 s or from a selection made more than 150 m from the car. `roadName` is the OSM name (else `ref`) of that way; `queriedAtMs` is the laptop time of the request whose data gave the value. Display only: the tablet shows it as the map's limit (a confirmed sign read wins), never as a speed to drive.
+  - Server flags: `--speed-limits off|osm` and `--speed-limit-endpoint URL` (default `https://overpass-api.de/api/interpreter`); navigation must be running (the field rides on `navigation.packet`). The lookup never blocks the navigation thread: each packet is answered from the ways of the last Overpass response, and at most one background request runs (a new one when the car moved >= 40 m from the last query centre or its data is >= 30 s old; >= 5 s apart; after HTTP 429 / 5xx / a timeout the next waits 30 s, doubling to 5 min; 8 s timeout). Works in sim and live alike (sim: the session's GPS track).
+  - **Privacy:** with `--speed-limits osm` the car position is sent to that third-party Overpass server (about every 40 m of driving, at least every 30 s while navigating). The server says so once at start-up and never logs coordinates.
 
 ## Sessions (server behaviour the client must follow)
 
@@ -153,7 +191,7 @@ The phase1 Node.js navigation engine computes `SpatialNavigationPacket`s. It is 
 ## Contract files and tests
 
 - JSON Schemas (draft 2020-12), one per message type: `perception_engine/contracts/schemas/<type>.schema.json`. Golden samples from real server / relay runs: `perception_engine/contracts/samples/v2/` (regenerate with `perception_engine/tests/make_golden_samples_v2.py` and `perception_engine/nav/make_contract_samples.js`).
-- Python: `perception_engine/tests/test_protocol_v2.py` validates every sample against its schema and runs a real server loopback. Kotlin: `perception_engine/android/perception-bridge` (built from `driving_assist/` as `:perception-bridge`) `ProtocolV2Test` decodes and round-trips every sample; `ContractFieldCoverageTest` fails when a sample field is not modelled in Kotlin (apart from a short list of server diagnostics) or a value changes on the Kotlin round trip.
+- Python: `perception_engine/tests/test_protocol_v2.py` validates every sample against its schema and runs a real server loopback. Kotlin: `perception_engine/android/perception-bridge` (built from `frontend/` as `:perception-bridge`) `ProtocolV2Test` decodes and round-trips every sample; `ContractFieldCoverageTest` fails when a sample field is not modelled in Kotlin (apart from a short list of server diagnostics) or a value changes on the Kotlin round trip.
 
 ## Client-side rules (implemented in the Kotlin `PerceptionBridge`)
 

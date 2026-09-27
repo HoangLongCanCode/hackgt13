@@ -9,8 +9,11 @@ AI Spatial Driving Copilot. Run from perception_engine/:
 
 Offline: every contracts/schemas/*.schema.json is a valid draft 2020-12 schema; every contracts/samples/v2/*.json
 validates against the schema of its `type`; the SDC1 header round-trips (and rejects bad input with the right skip
-reason); the wire builders produce schema-valid messages; the fast-lane geometry distance is sane; the NavWorker
-calls the relay from one thread and broadcasts its packets.
+reason); the wire builders produce schema-valid messages (lanes.boundaryColors / boundaryStyles aligned with
+laneBoundaries; road.drivablePolygon from the lanes block's drivable mask, <= 32 points, v2 only); the fast-lane
+geometry distance is sane; the NavWorker
+calls the relay from one thread and broadcasts its packets, and answers destination searches (client.place_search ->
+navigation.places) to the asking client only.
 Server (real engine, `--mode auto` + a fake nav relay): live loopback (20 frames under credits -> exactly one
 wave-1 answer each with the right echo and ptsSeconds, geometry/fused distance on every vehicle, rotationDegrees
 honoured, a credit-violating burst still answered once per frame, badHeader / decodeError skips, ping -> pong);
@@ -231,6 +234,89 @@ def t_wire_offline() -> str:
     return "frame/update/hello/stats/skip/pong/error valid"
 
 
+def t_lane_boundary_meta_offline() -> str:
+    """lanes.boundaryColors / boundaryStyles stay parallel to laneBoundaries after the len >= 2 filter, unknown
+    values become "unknown", a length mismatch or missing metadata omits them, and v1 never carries them."""
+    from perception.common.schemas import LaneState
+    from perception.realtime.wire import lanes_to_wire, to_wire
+    v = validators()
+    res = _synthetic_result()
+    lines = [[[100.0, 700.0], [500.0, 400.0]], [[640.0, 700.0]], [[900.0, 700.0], [700.0, 400.0]],
+             [[1200.0, 700.0], [760.0, 400.0]]]
+    res.lanes = LaneState(2, 3, lines, 0.8, ["yellow", "white", "white", "red"], ["solid", "dashed", "dashed", "dotted"])
+    meta = {"seq": 5, "sessionId": "s", "source": {"kind": "video", "id": "a"}, "image": {"width": 1280, "height": 720},
+            "blockAges": {"lanes": 0}, "echo": None}
+    f = to_wire(res, meta)
+    assert_valid(v, f)
+    ln = f["lanes"]
+    check(len(ln["laneBoundaries"]) == 3, "degenerate polyline dropped")
+    check(ln["boundaryColors"] == ["yellow", "white", "unknown"], f"colours aligned: {ln['boundaryColors']}")
+    check(ln["boundaryStyles"] == ["solid", "dashed", "unknown"], f"styles aligned: {ln['boundaryStyles']}")
+    check("boundaryColors" not in to_wire(res, meta, schema_version=1)["lanes"], "v1 has no boundaryColors")
+    check("boundaryColors" not in lanes_to_wire(LaneState(2, 3, lines, 0.8)), "absent without metadata")
+    check("boundaryStyles" not in lanes_to_wire(LaneState(2, 3, lines, 0.8, None, ["solid"])), "length mismatch")
+    check(res.lanes.to_dict()["boundaryColors"] == res.lanes.boundaryColors, "to_dict keeps metadata")
+    check("boundaryColors" not in LaneState(1, 1).to_dict(), "to_dict omits None metadata")
+    bad = {**f, "lanes": {**ln, "boundaryColors": ["red", "white", "white"]}}
+    check(bool(list(v["perception.frame"].iter_errors(bad))), "schema rejects an unknown colour")
+    return "aligned after the len >= 2 filter, v1 unchanged"
+
+
+def t_drivable_polygon_offline() -> str:
+    """road.drivablePolygon: the lanes block's outline joins the per-lane regions of the drivable mask (split by
+    painted lines) but not road seen past an A-pillar, stops at the dashboard, has <= 32 points in frame px; the
+    wire caps / cleans it, v1 never carries it, and every v2 sample road block has one."""
+    import numpy as np
+    from jsonschema import Draft202012Validator
+    from perception.common.schemas import RoadGeometry
+    from perception.lanes.lanes import drivable_outline
+    from perception.realtime.wire import road_to_wire, to_wire
+    v = validators()
+    drv = np.zeros((360, 640), bool)
+    for y in range(200, 300):                           # road trapezoid above the dashboard (rows >= 300)
+        half = 40 + (y - 200) * 2.2
+        drv[y, int(320 - half):int(320 + half)] = True
+    drv[:, 270:274] = drv[:, 366:371] = False           # two lane lines (not drivable)
+    drv[250:300, 0:20] = True                           # road through the side window, past a >= 40 px pillar
+    drv[330:340, 300:340] = True                        # a speck on the dashboard
+    poly = drivable_outline(drv, 2.0, 2.0)
+    xs, ys = [p[0] for p in poly], [p[1] for p in poly]
+    check(3 <= len(poly) <= 32, f"point count {len(poly)}")
+    check(min(xs) >= 120 and max(xs) <= 1160 and min(ys) >= 398 and max(ys) <= 600, f"one road, px: {poly}")
+    check(min(xs) < 270 * 2 and max(xs) > 371 * 2, "the three lane regions are one outline")
+    check(all(round(c, 1) == c for p in poly for c in p), "0.1 px")
+    check(drivable_outline(np.zeros((360, 640), bool), 2.0, 2.0) == [], "no drivable region -> []")
+    speck = np.zeros((360, 640), bool)
+    speck[100:105, 100:105] = True
+    check(drivable_outline(speck, 2.0, 2.0) == [], "a speck is not road")
+    cam = {"focalPx": 700.0, "principalPoint": [640.0, 360.0], "horizonY": 360.0, "cameraHeightMeters": 1.3}
+    circle = [[640 + 300 * np.cos(a), 540 + 150 * np.sin(a)] for a in np.linspace(0, 2 * np.pi, 60, endpoint=False)]
+    rg = RoadGeometry(0.3, [], 360.0, None, [], circle + [[float("nan"), 1.0]])
+    w = road_to_wire(rg, cam, 1280, 720)["drivablePolygon"]
+    check(3 <= len(w) <= 32 and all(round(c, 1) == c for p in w for c in p), f"wire caps to 32: {len(w)}")
+    check(road_to_wire(RoadGeometry(0.3), cam, 1280, 720)["drivablePolygon"] == [], "unknown -> []")
+    check("drivablePolygon" not in road_to_wire(rg, cam, 1280, 720, v2=False), "v1 road has no drivablePolygon")
+    res = _synthetic_result()
+    res.road.drivablePolygon = poly
+    meta = {"seq": 5, "sessionId": "s", "source": {"kind": "video", "id": "a"}, "image": {"width": 1280, "height": 720},
+            "blockAges": {"lanes": 0}, "echo": None}
+    f = to_wire(res, meta)
+    assert_valid(v, f)
+    check(f["road"]["drivablePolygon"] == poly, "frame carries the outline")
+    v1 = Draft202012Validator(json.loads((CONTRACTS / "perception_frame.v1.schema.json").read_text(encoding="utf-8")))
+    f1 = to_wire(res, meta, schema_version=1)
+    check("drivablePolygon" not in f1["road"] and not list(v1.iter_errors(f1)), "v1 frame unchanged and valid")
+    bad = {**f, "road": {**f["road"], "drivablePolygon": [[1.0, 2.0]] * 33}}
+    check(bool(list(v["perception.frame"].iter_errors(bad))), "schema rejects 33 points")
+    n = 0
+    for sp in sorted(SAMPLES_V2.glob("perception.*.json")):
+        road = json.loads(sp.read_text(encoding="utf-8")).get("road")
+        if road:
+            check(3 <= len(road.get("drivablePolygon") or []) <= 32, f"{sp.name}: road.drivablePolygon")
+            n += 1
+    return f"{len(poly)}-point outline, v1 unchanged, {n} samples"
+
+
 def t_geometry_distance() -> str:
     from perception.depth.geometry import Camera
     from perception.engine import GEOMETRY_MAX_CONFIDENCE, geometry_distance
@@ -264,6 +350,9 @@ def t_nav_worker_offline() -> str:
         def broadcast_error(self, code, msg):
             raise AssertionError(f"relay error {code}: {msg}")
 
+        def broadcast_hello(self, *_):
+            pass
+
         def media_pts_now(self):
             pts["t"] += 0.1
             return pts["t"]
@@ -294,8 +383,150 @@ def t_nav_worker_offline() -> str:
     w.join(2)
     check(len(got) == 1 and got[0]["ptsSeconds"] is None and got[0]["tripTimestampMs"] == 1790000000123,
           f"live packet {got[:1]}")
+    # --nav-live: no destination until the tablet sends client.destination; then the route follows the next fix.
+    got.clear()
+    w = NavWorker(Srv(), FakeNavRelay, SimpleNamespace(nav_session=None, nav_live=True, **base))
+    w.start()
+    time.sleep(0.2)
+    check(w.info()["available"] is False and "waiting for a destination" in (w.info()["error"] or ""), f"waiting {w.info()}")
+    w.set_destination("Piedmont Park")
+    t0 = time.time()
+    while ("start_live", "Piedmont Park") not in FakeNavRelay.calls and time.time() - t0 < 3:
+        time.sleep(0.05)
+    w.submit_trip({"timestampMs": 1790000000456, "location": {"lat": 33.77, "lng": -84.39}, "heading": 0.0,
+                   "speedMps": 0.0}, "c1")
+    t0 = time.time()
+    while not got and time.time() - t0 < 3:
+        time.sleep(0.05)
+    info = w.info()
+    w.stop()
+    w.join(2)
+    check(("start_live", "Piedmont Park") in FakeNavRelay.calls, "client.destination restarted live navigation")
+    check(len(got) == 1 and info["available"] and info["destination"] == "Piedmont Park" and info["error"] is None,
+          f"destination packet {info}")
     threads = {c for c in FakeNavRelay.calls}
-    return f"sim {len(ptss)} packets, live 1 packet, relay calls {len(threads)}"
+    return f"sim {len(ptss)} packets, live 1 packet, tablet destination ok, relay calls {len(threads)}"
+
+
+def t_nav_place_search_offline() -> str:
+    """client.place_search -> NavWorker -> relay.search -> one navigation.places for the asking client only
+    (distanceMeters from `near`, schema-valid, a failing search answered with a redacted error); a picked place
+    reaches relay.start_live as destination_place. Server handlers: validation, sender rule, 2 searches / s."""
+    from perception.realtime.server import Client, NavWorker, Server, haversine_m
+    sys.path.insert(0, str(ENGINE_ROOT))
+    from tests.fake_nav_relay import FakeNavRelay
+    v = validators()
+    got: list[tuple[str, dict]] = []
+
+    class Srv:
+        def post(self, fn, *args):
+            fn(*args)
+
+        def deliver_places(self, key, data):
+            got.append((key, json.loads(data)))
+
+        def broadcast_nav(self, data):
+            pass
+
+        def broadcast_error(self, code, msg):
+            raise AssertionError(f"relay error {code}: {msg}")
+
+        def broadcast_hello(self, *_):
+            pass
+
+        def media_pts_now(self):
+            return None
+    base = dict(nav_route=None, nav_destination=None, nav_origin=None, nav_provider="mock", phase1_dir=None,
+                node="node")
+    near = {"lat": 33.7756, "lng": -84.3963}
+    place = {"label": "Foxtail Coffee - Society Atlanta", "placeId": "ChIJexample1",
+             "coordinate": {"lat": 33.7766, "lng": -84.3838}}
+    w = NavWorker(Srv(), FakeNavRelay, SimpleNamespace(nav_session=None, nav_live=True, **base))
+    w.start()
+    try:
+        t0 = time.time()
+        while not w.running and time.time() - t0 < 3:
+            time.sleep(0.02)
+        w.submit_search("c2", "s1", "coffee", near)
+        w.submit_search("c3", "s2", "coffee", None)
+        w.submit_search("c2", "s3", "fail", near)
+        t0 = time.time()
+        while len(got) < 3 and time.time() - t0 < 3:
+            time.sleep(0.02)
+        check(len(got) == 3, f"one navigation.places per search: {got}")
+        for _, m in got:
+            assert_valid(v, m)
+        by_id = {m["requestId"]: (k, m) for k, m in got}
+        k, m = by_id["s1"]
+        check(k == "c2" and m["query"] == "coffee" and m["provider"] == "mock" and m["error"] is None, f"{k} {m}")
+        check(len(m["places"]) == 2 and all(p["distanceMeters"] == round(haversine_m(near, p["location"]), 1)
+                                            for p in m["places"]), f"distances {m['places']}")
+        check(abs(m["places"][0]["distanceMeters"] - 1162) < 5, f"haversine {m['places'][0]['distanceMeters']}")
+        k, m = by_id["s2"]
+        check(k == "c3" and m["places"] and all(p["distanceMeters"] is None for p in m["places"]), f"no near {m}")
+        k, m = by_id["s3"]
+        check(k == "c2" and m["places"] == [] and "HTTP 500" in (m["error"] or "")
+              and "SECRET_TEST_KEY" not in m["error"] and "REDACTED" in m["error"], f"failed search {m}")
+        w.set_destination(place["label"], place)
+        t0 = time.time()
+        while ("start_live_place", place) not in FakeNavRelay.calls and time.time() - t0 < 3:
+            time.sleep(0.02)
+        check(("start_live_place", place) in FakeNavRelay.calls, "picked place -> start_live(destination_place)")
+        check(w.info()["destination"] == place["label"], f"hello destination {w.info()}")
+    finally:
+        w.stop()
+        w.join(2)
+
+    # Server handlers (loop side), with a stub server: what reaches the worker, what the client is told.
+    class NavStub:
+        running, mode = True, "live"
+
+        def __init__(self):
+            self.dest, self.searches = [], []
+
+        def set_destination(self, query, place=None):
+            self.dest.append((query, place))
+
+        def submit_search(self, *args):
+            self.searches.append(args)
+    nav = NavStub()
+    c = Client(None, "test")
+    srv = SimpleNamespace(nav=nav, session=SimpleNamespace(controller=c.key), a=SimpleNamespace(nav_provider="mock"))
+    srv._live_nav_sender = lambda *args: Server._live_nav_sender(srv, *args)
+
+    def sample(name):
+        return json.loads((SAMPLES_V2 / name).read_text(encoding="utf-8"))
+
+    def last_ctrl():
+        return json.loads(c.ctrl[-1]) if c.ctrl else None
+    Server.on_destination(srv, c, sample("client.destination.place.json"))
+    Server.on_destination(srv, c, sample("client.destination.json"))
+    check(nav.dest == [(place["label"], place), ("Piedmont Park, Atlanta", None)], f"destinations {nav.dest}")
+    Server.on_destination(srv, c, {**sample("client.destination.place.json"), "location": {"lat": 95.0, "lng": 0}})
+    check(len(nav.dest) == 2 and last_ctrl()["code"] == "badMessage", f"bad location {last_ctrl()}")
+    search = sample("client.place_search.json")
+    for _ in range(3):
+        Server.on_place_search(srv, c, search)
+    check(nav.searches == [(c.key, "s1", "coffee", search["near"])] * 2, f"searches {nav.searches}")
+    limited = last_ctrl()
+    assert_valid(v, limited)
+    check(limited["type"] == "navigation.places" and limited["error"] == "rate limited" and not limited["places"],
+          f"third search in a second: {limited}")
+    c.search_times[0] -= 1.1                               # a second later: answered again
+    Server.on_place_search(srv, c, {**search, "near": None})
+    check(len(nav.searches) == 3 and nav.searches[-1][3] is None, f"after a second {nav.searches}")
+    for bad in ({**search, "requestId": ""}, {**search, "query": " "}, {**search, "near": {"lat": "x", "lng": 0}}):
+        c._err_last.clear()
+        Server.on_place_search(srv, c, bad)
+        check(last_ctrl()["code"] == "badMessage", f"bad search {bad} -> {last_ctrl()}")
+    srv.session.controller = "someone-else"
+    Server.on_place_search(srv, c, search)
+    check(last_ctrl()["code"] == "notUplinkClient", f"sender rule {last_ctrl()}")
+    nav.running = False
+    Server.on_place_search(srv, c, search)
+    check(last_ctrl()["code"] == "modeNotAvailable" and len(nav.searches) == 3, f"no live nav {last_ctrl()}")
+    return (f"3 searches -> 3 answers to the right clients, {len(by_id['s1'][1]['places'])} places with distances; "
+            f"picked place routed; rate limit, validation and sender rule ok")
 
 
 def t_nav_failures_and_trip_checks() -> str:
@@ -758,7 +989,10 @@ def main() -> int:
     ok = True
     for name, fn in [("schemas well-formed", t_schemas_wellformed), ("samples validate", t_samples_validate),
                      ("SDC1 header round trip", t_header_roundtrip), ("wire builders", t_wire_offline),
+                     ("lane boundary colours / styles", t_lane_boundary_meta_offline),
+                     ("road drivable polygon", t_drivable_polygon_offline),
                      ("geometry distance", t_geometry_distance), ("nav worker (fake relay)", t_nav_worker_offline),
+                     ("nav place search (fake relay)", t_nav_place_search_offline),
                      ("nav failures + trip_state checks", t_nav_failures_and_trip_checks)]:
         ok &= run_test(name, fn)
     if not a.offline:

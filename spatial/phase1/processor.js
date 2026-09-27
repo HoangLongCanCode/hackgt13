@@ -1,5 +1,6 @@
 const { haversineMeters, projectPointToSegmentMeters } = require('./geo');
 const { getLatestTripState } = require('./session');
+const { encodePolyline } = require('./polylines');
 
 function validateRoute(route) {
   if (!route || typeof route !== 'object') {
@@ -295,7 +296,8 @@ function buildSpatialNavigationPacket({ manifest, route, tripStates }) {
       offRoute: progress.offRoute,
     },
     route: {
-      polyline: route.polyline,
+      // Consumers draw the route from this; sessions without an encoded polyline get one from their geometry.
+      polyline: route.polyline || encodePolyline(route.geometry || []),
       steps: route.steps,
       totalDistanceMeters: route.totalDistanceMeters,
       totalDurationSeconds: route.totalDurationSeconds,

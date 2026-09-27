@@ -3,10 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "type": "commonjs",
-  "main": "src/phase1/index.js",
+  "main": "phase1/index.js",
   "scripts": {
     "demo:phase1": "node scripts/run-phase1-demo.js",
     "pull:android": "node scripts/pull-android-capture.js",
-    "process:captured": "node scripts/process-captured-session.js"
+    "process:captured": "node scripts/process-captured-session.js",
+    "test": "node scripts/test-google-provider.js",
+    "check:google": "node scripts/check-google-key.js"
   }
 }

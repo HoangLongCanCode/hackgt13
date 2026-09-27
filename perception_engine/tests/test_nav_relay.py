@@ -307,6 +307,69 @@ def test_live_destination_with_origin():
         assert message["routeState"]["action"] == "TURN_RIGHT", message["routeState"]
 
 
+def test_search_mock_provider():
+    """op search (client.place_search): the mock provider's made-up places near `near`, in any mode, without
+    disturbing live navigation; bad input raises (and does not restart the child)."""
+    with new_relay() as relay:
+        near = {"lat": 40.4406, "lng": -79.9959}
+        places = relay.search("coffee", near=near, provider="mock")
+        assert [p["label"] for p in places] == ["coffee (mock 1)", "coffee (mock 2)", "coffee (mock 3)"], places
+        for p in places:
+            assert set(p) == {"placeId", "label", "address", "location"} and p["placeId"].startswith("mock_"), p
+            assert abs(p["location"]["lat"] - near["lat"]) < 0.02 and abs(p["location"]["lng"] - near["lng"]) < 0.02, p
+        assert relay.search("coffee", near=near) == places, "mock search is deterministic"
+        atlanta = relay.search("coffee")  # no near: around the mock default origin (Georgia Tech)
+        assert abs(atlanta[0]["location"]["lat"] - 33.7756) < 0.02, atlanta[0]
+        relay.start_live(route_json=str(CITY / "route.json"))
+        assert relay.search("Piedmont Park", near=near)[0]["label"] == "Piedmont Park (mock 1)"
+        assert relay.on_trip_state(_live_samples(CITY)[0]) is not None, "live navigation still running after a search"
+        pid = relay.status()["pid"]
+        for kwargs in ({"query": ""}, {"query": "x" * 201}, {"query": "coffee", "provider": "bogus"},
+                       {"query": "coffee", "near": {"lat": 95.0, "lng": 0.0}}):
+            try:
+                relay.search(**kwargs)
+            except NavRelayError as exc:
+                assert "search failed" in str(exc), str(exc)
+            else:
+                raise AssertionError(f"search({kwargs}) accepted")
+        assert relay.status()["pid"] == pid and relay.restarts == 0, "bad searches must not restart the child"
+        MEASUREMENTS["search (mock)"] = f"{len(places)} places, first {places[0]['label']!r}"
+
+
+def test_live_destination_place_built_from_next_trip_state():
+    """client.destination with a location: the route goes to exactly that point (no geocode of the label), built
+    from the next trip state; a crash before that replays the place, not a geocode of the label."""
+    place = {"label": "Foxtail Coffee - Society Atlanta", "placeId": "ChIJexample1",
+             "coordinate": {"lat": 40.4450, "lng": -79.9900}}
+    sample = {"type": "client.trip_state", "timestampMs": 1790000000123, "location": {"lat": 40.4406, "lng": -79.9959},
+              "heading": 91.2, "speedMps": 6.1, "accuracyMeters": 4.1}
+    with new_relay() as relay:
+        relay.start_live(destination_place=place, provider="mock")
+        assert relay.info["routeReady"] is False and relay.info["pendingDestination"] == place["label"], relay.info
+        relay._proc.kill()  # restored from the start_live request, destinationPlace included
+        message = relay.on_trip_state(sample)
+        assert message is not None and relay.restarts == 1, relay.last_error
+        validate_nav(message)
+        dest = message["packet"]["destination"]
+        assert dest == {"label": place["label"], "placeId": place["placeId"], "coordinate": place["coordinate"]}, dest
+        assert message["packet"]["progress"]["distanceTraveledMeters"] == 0
+        with_origin = NavRelay(PHASE1_DIR)
+        try:
+            with_origin.start_live(origin="40.4406,-79.9959", destination_place=place, provider="mock")
+            assert with_origin.info["routeReady"] is True and with_origin.info["route"]["destination"] == place["label"]
+        finally:
+            with_origin.close()
+    for bad in ({"label": "", "coordinate": place["coordinate"]}, {"label": "x", "coordinate": {"lat": 95.0, "lng": 0}},
+                {"label": "x"}):
+        with new_relay() as relay:
+            try:
+                relay.start_live(destination_place=bad, provider="mock")
+            except NavRelayError as exc:
+                assert "destination_place" in str(exc) or "destinationPlace" in str(exc), str(exc)
+            else:
+                raise AssertionError(f"start_live(destination_place={bad}) accepted")
+
+
 def test_live_bad_inputs():
     with new_relay() as relay:
         for kwargs in ({}, {"origin": "Somewhere"}):

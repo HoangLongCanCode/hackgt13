@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hackgt13.local/contracts/schemas/client.place_search.schema.json",
+  "title": "client.place_search (protocol v2)",
+  "description": "Client -> server: search places by free text (\"coffee\", \"Piedmont Park\", an address) for live navigation (PROTOCOL_v2.md, Navigation). The server's phase1 provider (Google Places Text Search, falling back to Geocoding; the mock provider returns made-up places) answers this client only with one navigation.places echoing requestId. Sent on submit, not per keystroke; the server answers at most 2 searches per second per client. Same sender rule as client.trip_state.",
+  "type": "object",
+  "required": [
+    "type",
+    "requestId",
+    "query"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "type": {
+      "const": "client.place_search"
+    },
+    "requestId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "description": "Echoed in navigation.places (the client keeps only the answer to its newest search)."
+    },
+    "query": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "near": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "lat",
+            "lng"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "lat": {
+              "type": "number",
+              "minimum": -90,
+              "maximum": 90
+            },
+            "lng": {
+              "type": "number",
+              "minimum": -180,
+              "maximum": 180
+            }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Bias results around this point (the tablet's latest GPS fix); null / absent = no bias."
+    }
+  }
+}

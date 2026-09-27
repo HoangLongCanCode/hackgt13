@@ -1,3 +1,5 @@
+const { encodePolyline } = require('../polylines');
+
 function hashString(value) {
   let hash = 0;
   for (let index = 0; index < value.length; index += 1) {
@@ -6,8 +8,10 @@ function hashString(value) {
   return hash;
 }
 
+const DEFAULT_ORIGIN = { lat: 33.7756, lng: -84.3963 };
+
 function resolveDestination(query, config = {}) {
-  const origin = config.origin || { lat: 33.7756, lng: -84.3963 };
+  const origin = config.origin || DEFAULT_ORIGIN;
   const hash = hashString(query);
   const latOffset = ((hash % 1200) / 100000) + 0.0015;
   const lngOffset = (((hash >> 8) % 1200) / 100000) + 0.0015;
@@ -20,6 +24,21 @@ function resolveDestination(query, config = {}) {
       lng: origin.lng + lngOffset,
     },
   });
+}
+
+// Three made-up places a few hundred metres from config.near (else the default origin), nearest first.
+function searchPlaces(query, config = {}) {
+  const near = config.near || config.origin || DEFAULT_ORIGIN;
+  const hash = hashString(query);
+  return Promise.resolve([1, 2, 3].map((n) => ({
+    placeId: `mock_${hash}_${n}`,
+    label: `${query} (mock ${n})`,
+    address: `${n * 100} Mock Street`,
+    location: {
+      lat: near.lat + n * 0.002 + (hash % 100) / 100000,
+      lng: near.lng + n * 0.0015 + ((hash >> 8) % 100) / 100000,
+    },
+  })));
 }
 
 function fetchRoute(origin, destination, config = {}) {
@@ -40,7 +59,8 @@ function fetchRoute(origin, destination, config = {}) {
     routeApiVersion: 'mock-v1',
     origin,
     destination,
-    polyline: '',
+    // Encoded like a real provider's route, so displays (the tablet's route map) need no special case.
+    polyline: encodePolyline(geometry),
     geometry,
     steps: [
       {
@@ -77,5 +97,6 @@ function fetchRoute(origin, destination, config = {}) {
 
 module.exports = {
   resolveDestination,
+  searchPlaces,
   fetchRoute,
 };

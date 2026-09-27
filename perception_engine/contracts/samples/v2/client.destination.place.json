@@ -1,0 +1,9 @@
+{
+  "type": "client.destination",
+  "query": "Foxtail Coffee - Society Atlanta",
+  "placeId": "ChIJexample1",
+  "location": {
+    "lat": 33.7766,
+    "lng": -84.3838
+  }
+}

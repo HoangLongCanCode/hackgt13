@@ -1,0 +1,31 @@
+{
+  "type": "navigation.places",
+  "schemaVersion": 2,
+  "serverTimeMs": 1790000000500,
+  "requestId": "s1",
+  "query": "coffee",
+  "provider": "google",
+  "places": [
+    {
+      "placeId": "ChIJexample1",
+      "label": "Foxtail Coffee - Society Atlanta",
+      "address": "811 Peachtree St NE Unit 5, Atlanta, GA 30308, USA",
+      "location": {
+        "lat": 33.7766,
+        "lng": -84.3838
+      },
+      "distanceMeters": 1162.0
+    },
+    {
+      "placeId": "ChIJexample2",
+      "label": "Urban Grind",
+      "address": "962 Marietta St NW, Atlanta, GA 30318, USA",
+      "location": {
+        "lat": 33.7801,
+        "lng": -84.4104
+      },
+      "distanceMeters": 1389.0
+    }
+  ],
+  "error": null
+}

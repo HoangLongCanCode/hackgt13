@@ -1,7 +1,7 @@
 # Perception Engine
 
 The laptop half of the AI Spatial Driving Copilot, a HackGT 13 project by Long Huynh, Luong Nguyen and Gia Minh Do.
-A Samsung Galaxy Tab S9 runs the AR app and does all I/O: camera, display, audio and GPS. This engine runs the vision models
+A Samsung Galaxy Tab S9 runs the tablet app (`../frontend/`) and does all I/O: camera, display, audio and GPS. This engine runs the vision models
 on the laptop GPU (Windows 11, RTX 5060 Laptop, 8 GB). It streams the results to the tablet over one WebSocket,
 `ws://<host>:8765/perception`, and [`contracts/PROTOCOL_v2.md`](contracts/PROTOCOL_v2.md) is the source of truth
 for the messages.
@@ -29,17 +29,17 @@ loop (plan sections 16, 18 and 38).
 
 ## Folder layout
 
-Everything the perception side owns lives in this folder (branch `long`, to be merged into `main`): the Python engine,
-the protocol contract, the navigation relay, the JVM bridge modules the Android app builds, and the docs. The AR app
-itself is `../driving_assist/` and the navigation engine is `../spatial/` (on `main`).
+Everything the perception side owns lives in this folder (on `main`): the Python engine,
+the protocol contract, the navigation relay, the JVM bridge modules the Android app builds, and the docs. The tablet app
+itself is `../frontend/` and the navigation engine is `../spatial/`.
 
 | Path | What | In git? |
 |---|---|---|
 | [`AGENTS.md`](AGENTS.md), [`CLAUDE.md`](CLAUDE.md) | Guide for people and AI coding agents working in this folder | yes |
 | [`contracts/`](contracts/) | Protocol v2 spec ([`PROTOCOL_v2.md`](contracts/PROTOCOL_v2.md), the single source of truth), one JSON Schema per message, golden samples from real runs | yes |
-| [`docs/`](docs/) | Overview, interfaces, runbook, navigation integration, models and licences, changelog, PR text, example captures | yes |
+| [`docs/`](docs/) | Repo overview and repo-wide agent rules, overview, interfaces, runbook, navigation integration, models and licences, audio cue spec (`docs/audio/`), changelog, PR text, example captures | yes |
 | [`nav/`](nav/) | phase1 navigation relay (Node child process of the server), demo sessions, sample generator | yes |
-| [`android/perception-bridge/`](android/perception-bridge/) | Pure Kotlin/JVM library: protocol v2 client, `PerceptionBridge`, `WorldModel`, Driving Context. Built from `../driving_assist/` as `:perception-bridge` and used by the app | yes |
+| [`android/perception-bridge/`](android/perception-bridge/) | Pure Kotlin/JVM library: protocol v2 client, `PerceptionBridge`, `WorldModel`, Driving Context. Built from `../frontend/` as `:perception-bridge` and used by the app | yes |
 | [`android/bridge-cli/`](android/bridge-cli/) | JVM fake tablet on the same `PerceptionBridge` (`:bridge-cli`, output in `android/bridge-cli/build/install/`) | yes |
 | `perception/` | The Python package: one sub-package per block, `engine.py` (the per-frame scheduler), `realtime/` (the WebSocket server), `common/` (schemas, video input, [`paths.py`](perception/common/paths.py)) | yes |
 | `perception/config_realtime.yaml` | Realtime defaults: models, schedule and camera | yes |
@@ -168,6 +168,10 @@ process and sends its `navigation.packet` messages on the same socket (see the N
 
 - sim and video: `--nav-session DIR`
 - live: `--nav-route route.json`, or `--nav-destination "QUERY"` with `--nav-provider mock|google`
+
+The same port also serves HTTP `GET /health`, `GET /config` and the ElevenLabs voice proxy for the tablet
+(`POST /tts`, `GET /tts/health`; key only in the gitignored `.env`; loopback only unless `--tts-allow-lan`; `--no-tts`
+turns it off).
 
 `python -m perception.realtime.server --help` lists the current flags.
 

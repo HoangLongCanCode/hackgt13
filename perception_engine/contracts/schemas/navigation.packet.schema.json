@@ -19,9 +19,25 @@
       "description": "Trip clock time of the packet. sim: trip_state[0].timestampMs + 1000 * ptsSeconds (or the session manifest's videoStartTimestampMs + 1000 * ptsSeconds when present). live: timestamp of the newest client.trip_state used (= packet.generatedAtMs)."
     },
     "routeState": { "$ref": "#/$defs/routeState" },
-    "packet": { "$ref": "#/$defs/spatialNavigationPacket" }
+    "packet": { "$ref": "#/$defs/spatialNavigationPacket" },
+    "speedLimit": {
+      "description": "Posted speed limit of the road at packet.progress.currentLocation, looked up by the laptop (--speed-limits osm). Absent when the laptop runs without speed limits (the default); null when they are on but no current value is known (no car road within 25 m, the nearest road has no 'N mph' maxspeed, no answer yet, or data older than 60 s).",
+      "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/speedLimit" }]
+    }
   },
   "$defs": {
+    "speedLimit": {
+      "type": "object",
+      "required": ["valueMph", "source", "roadName", "wayId", "queriedAtMs"],
+      "additionalProperties": false,
+      "properties": {
+        "valueMph": { "type": "integer", "minimum": 5, "maximum": 85, "description": "OpenStreetMap maxspeed of the nearest car road, only when tagged 'N mph' (unitless values are km/h and are not used)." },
+        "source": { "const": "osm" },
+        "roadName": { "type": ["string", "null"], "description": "OSM name (else ref) of the way the value comes from." },
+        "wayId": { "type": ["integer", "null"], "description": "OSM way id." },
+        "queriedAtMs": { "type": "integer", "description": "Laptop epoch ms of the Overpass request whose data gave the value." }
+      }
+    },
     "geo": {
       "type": "object",
       "required": ["lat", "lng"],

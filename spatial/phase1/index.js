@@ -1,6 +1,6 @@
 const { loadPhase1Session } = require('./session');
 const { buildSpatialNavigationPacket } = require('./processor');
-const { buildRouteSnapshot, sampleRouteTripStates } = require('./capture');
+const { buildRouteSnapshot, searchPlaces, sampleRouteTripStates } = require('./capture');
 const { createRouteProvider } = require('./providers');
 
 function buildPacketFromSessionDir(sessionDir) {
@@ -13,6 +13,7 @@ module.exports = {
   buildSpatialNavigationPacket,
   buildPacketFromSessionDir,
   buildRouteSnapshot,
+  searchPlaces,
   sampleRouteTripStates,
   createRouteProvider,
 };

@@ -1,4 +1,61 @@
-# Changelog: branch `long` (perception engine)
+# Changelog (perception engine and its integration)
+
+## 2026-09-26: integration with the tablet app (branch `integration`, on top of `main` 1f398a9)
+
+The parts built separately now run as one product on the Galaxy Tab S9.
+
+- **One client.** `frontend/` (the tablet app from branch `tom`) now talks to the laptop only through
+  `android/perception-bridge` (`PerceptionBridge`, `WorldModel`, `DrivingContextEngine`), included in
+  `frontend/settings.gradle.kts` together with `:bridge-cli`. The app's own v2 client and decoder, its
+  `spatial.instruction` path, its lead-vehicle rule and its lane heuristics are deleted. Its frames used a leftover
+  4-byte tag that the server answered with `perception.skip badHeader`; the bridge sends `SDC1`. The package is now
+  `com.drivingassist.spatialcopilot`.
+- **Modes.** LIVE (camera uplink under credits, predicted to display time), SIM (Media3 player + `client.playback`,
+  `resultForPts`), DEMO (scripted scene; the placeholder "Exit 56" route exists only here). Settings dialog, launch
+  extras `perception.source|url|video|debug`, Debug view on a long press.
+- **Navigation from phase1 only.** GPS / fused location -> `client.trip_state` (about 1 Hz) in LIVE, media time in SIM.
+  The maneuver card, countdown and arrows read `navigation.packet`; degraded states (no GPS, stale or inaccurate fixes,
+  route unavailable, stale navigation, off route) are shown and the last route is held.
+- **Road arrows.** Placed on the road plane with the frame's `camera` block (same maths as `wire.ground_xz`, checked
+  against real frames) along the ego lane (lane lines by the straddle rule, then the lane anchors, then the camera
+  axis); they follow phase1's maneuver (lead-in, turn, keep / exit when the side is known, lane change from the Driving
+  Context), glide between results and fade in and out. FILL_CENTER mapping for the Tab S9 preview.
+- **Relevant vehicles only.** No boxes in the clean view; the lead vehicle is highlighted only in CLOSE / TOO CLOSE and
+  only with a measured distance ("Vehicle ahead: 8.4 m", "TOO CLOSE"). New optional
+  `DrivingContextConfig.criticalMinEgoSpeedMps` (off by default) holds CRITICAL at CLOSE while the route speed says the
+  car is stopped.
+- **Voice.** The `docs/audio/` design (brought in from branch `long` with the glasses-listener hardening): catalog
+  packaged into the APK, deterministic cue rules, a one-at-a-time arbiter, one AudioTrack with generated earcons.
+  TOO CLOSE is spoken once on entry and re-arms only after NORMAL. ElevenLabs through the new laptop proxy
+  `POST /tts` + `GET /tts/health` (`perception/realtime/tts_proxy.py`, `--no-tts`, `--tts-allow-lan`, loopback only by
+  default, disk cache, spend guard; the key stays in `perception_engine/.env`), then Android TTS, then earcons.
+- **phase1 seams.** Google HTTP errors no longer carry the API key (redacted in `http.js` and in `nav_relay.py`);
+  `keep-*`, `fork-*` and `ramp-*` maneuvers are no longer read as turns; `spatial/package.json` and the scripts point at
+  `spatial/phase1/`.
+- **Cleanup.** `android/app-integration/` (glue for the deleted `driving_assist/` app) is retired: its camera encoder,
+  GPS feeder, sim player and FILL_CENTER rule now live in `frontend/`. Docs no longer point at `driving_assist/`;
+  `frontend/perception_api.md` is a pointer to `contracts/PROTOCOL_v2.md`.
+- **Search and navigate (later the same day).** phase1's Google provider uses the Routes API (legacy Directions as
+  fallback) and gains Places Text Search; the tablet's "Where to?" panel searches (`client.place_search` ->
+  `navigation.places`) and a picked place is routed to exactly (`client.destination` with `location`); server flag
+  `--nav-live`; a key-free heading-up route map drawn from the packet's route polyline. Checked with a real key on the
+  Tab S9: "coffee" -> 8 Google places -> a Google driving route to the picked one.
+- Tests: `:perception-bridge` 117, `:app` 18 (new), `tests/test_tts_proxy.py` 9/9 (new), protocol 11/11 (offline 7/7),
+  ego path 3/3, nav relay 21/21. Run on the Tab S9 (Android 16): SIM, LIVE (with GPS -> phase1) and DEMO.
+
+- **Clean driving view (later the same day).** The clean view shows only painted-style lane arrows on the road
+  (one per lane from the lane model; target lane green, wrong lane red with the target blinking), the next-maneuver
+  instruction on top in feet / miles ("Drive straight", "Turn left in 900 ft", "Exit 94 in 0.6 mi"), a US speed-limit
+  sign top left, the TOO CLOSE brackets and pill, and a small corner button; the status chip, maneuver card, route
+  map, vehicle-close / light pills and chevrons are debug-only. RouteGuide and NavigationMapper skip phase1's
+  GO_STRAIGHT steps to the next real maneuver. The bridge's speed limit is a strict sign latch (10-85 mph, confidence
+  0.85, 0.8 s, cleared after a turn or a map-road change) with the map as fallback; the laptop can supply the map
+  value from OpenStreetMap (`--speed-limits osm`, off by default, `navigation.packet.speedLimit`). Voice: the
+  lane-change cue is on ("Move to the right lane for the exit, check for cars."), "Drive straight for two miles.",
+  exit numbers as words. DEMO shows it all in one 40 s loop. Checked on the Tab S9 in DEMO and SIM (highway clip:
+  lane 2 of 3 red, lane 3 green with the turn shape; speed limit from OpenStreetMap).
+
+## Branch `long` (perception engine), 2026-09-25/26
 
 What branch `long` of the AI Spatial Driving Copilot (HackGT 13 project by Long Huynh, Luong Nguyen and Gia Minh Do)
 adds on top of its base on `main` (commit `31a22c0`, "Merge pull request #1 from HoangLongCanCode/tom"). Target:

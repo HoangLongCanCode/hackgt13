@@ -146,6 +146,8 @@ data class WorldSnapshot(
     val camera: Camera? = null,
     val objects: Map<Int, ObjectState> = emptyMap(),
     val lanes: LanesState? = null,
+    /** The visible lanes from the detected lane lines (see [LaneLayout]), held briefly between runs; null = unknown. */
+    val laneLayout: LaneLayout? = null,
     val road: RoadState? = null,
     val signs: List<SignState> = emptyList(),
     val blockAges: Map<String, Int> = emptyMap(),
@@ -163,24 +165,68 @@ data class WorldSnapshot(
     val revision: Long = 0,
     /** Set by `predictedAt()`: how far (ms) boxes / distances were extrapolated past the capture time. */
     val predictedAheadMs: Double? = null,
+    /**
+     * Image column of the car's ground track: the newest road / lane vanishing point x, kept for the session (a mounted
+     * phone's yaw does not change) through stretches without lines. The lead corridor's fallback ([leadVehicle]).
+     */
+    val trackVpX: Double? = null,
 ) {
     val ptsSeconds: Double get() = timing?.ptsSeconds ?: 0.0
     val seq: Long get() = timing?.seq ?: -1
 
     /** This snapshot without perception content (what the Driving Context uses while stale). */
-    fun navigationOnly(): WorldSnapshot = copy(objects = emptyMap(), lanes = null, road = null, signs = emptyList())
+    fun navigationOnly(): WorldSnapshot = copy(objects = emptyMap(), lanes = null, laneLayout = null, road = null, signs = emptyList())
 
     fun objectsByClass(): Map<ObjectClass, List<ObjectState>> = objects.values.groupBy { it.cls }
 
     fun countsByClass(visibleOnly: Boolean = true): Map<ObjectClass, Int> =
         objects.values.filter { !visibleOnly || it.visible }.groupingBy { it.cls }.eachCount()
 
-    /** Vehicle in the ego path with the smallest distance (or lowest box bottom when no distances). */
-    fun leadVehicle(maxDistanceMeters: Double = 120.0): ObjectState? {
-        val inPath = objects.values.filter { it.cls.isVehicle && it.inEgoPath == true }
-        val withDistance = inPath.filter { it.distanceMeters != null && it.distanceMeters <= maxDistanceMeters }
-        return withDistance.minByOrNull { it.distanceMeters!! }
-            ?: inPath.filter { it.distanceMeters == null }.maxByOrNull { it.box.y2 }
+    /**
+     * The nearest vehicle in the car's OWN lane: seen in this frame or held by the WorldModel (unseen for up to its
+     * `staleTrackSeconds`: one missed detection keeps the lead and the following state's hysteresis), with a distance
+     * of at most [maxDistanceMeters], and its box bottom-centre (where it meets the road) inside
+     * 1. the [laneLayout]'s ego lane when the layout is stable and at most [maxLayoutAgeSeconds] old
+     *    ([LaneLayout.stableAndFresh]); else
+     * 2. a corridor of +-[corridorHalfWidthMeters] around the car's ground track at the box's flat-ground depth
+     *    ([FlatGround]). The track's image column: `road.vanishingPoint`, else the held layout's vanishing point (also
+     *    when not stable), else [trackVpX], and only then the principal point (the camera axis, metres off the track
+     *    with a yawed phone).
+     * Cars beyond the own lane's lines are never the lead: the server's `inEgoPath` corridor follows the camera axis,
+     * so with a yawed phone it took in cars 1-7 m to the side. Only without camera intrinsics does the old rule apply:
+     * `inEgoPath` vehicle with the smallest distance, or the lowest box bottom when none has a distance.
+     */
+    fun leadVehicle(
+        maxDistanceMeters: Double = 120.0,
+        maxLayoutAgeSeconds: Double = LaneLayout.MAX_USABLE_AGE_SECONDS,
+        corridorHalfWidthMeters: Double = 1.0,
+    ): ObjectState? {
+        val layout = laneLayout?.takeIf { it.stableAndFresh(maxLayoutAgeSeconds) }
+        val ground = if (layout == null) FlatGround.of(this) else null
+        if (layout == null && ground == null) {
+            val inPath = objects.values.filter { it.cls.isVehicle && it.inEgoPath == true }
+            val withDistance = inPath.filter { it.distanceMeters != null && it.distanceMeters <= maxDistanceMeters }
+            return withDistance.minByOrNull { it.distanceMeters!! }
+                ?: inPath.filter { it.distanceMeters == null }.maxByOrNull { it.box.y2 }
+        }
+        val trackX = road?.road?.vanishingPoint?.getOrNull(0)?.takeIf { it.isFinite() }
+            ?: laneLayout?.vpX?.takeIf { it.isFinite() }
+            ?: trackVpX?.takeIf { it.isFinite() }
+            ?: camera?.cx ?: 0.0
+        return objects.values
+            .filter { it.cls.isVehicle && it.bbox.size == 4 }
+            .filter { it.distanceMeters != null && it.distanceMeters <= maxDistanceMeters }
+            .filter { o ->
+                val (x, y) = o.box.bottomCenter
+                if (layout != null) {
+                    layout.laneAt(x, y) == layout.egoLane
+                } else {
+                    val g = ground!!
+                    val z = g.forwardAtRow(y)
+                    z != null && abs((x - trackX) * g.metersPerPixelAt(z) * g.cosYaw(trackX)) <= corridorHalfWidthMeters
+                }
+            }
+            .minByOrNull { it.distanceMeters!! }
     }
 
     /**
@@ -206,6 +252,24 @@ data class WorldSnapshot(
                 }
             }
             .sortedWith(compareBy<ObjectState> { it.distanceMeters ?: Double.MAX_VALUE }.thenByDescending { it.box.height })
+    }
+
+    /**
+     * Flat-ground distance (m) to where [o]'s box bottom meets the road ([FlatGround]): the [laneLayout]'s vanishing-point
+     * row as horizon and its camera height (the WorldModel's smoothed, clamped one), else the road / camera horizon and
+     * the plausible server height ([FlatGround.of]). Null without camera intrinsics or at / above the horizon. The
+     * Driving Context cross-checks a low-confidence lead distance with it.
+     */
+    fun flatGroundDistanceMeters(o: ObjectState): Double? {
+        if (o.bbox.size != 4) return null
+        val layout = laneLayout
+        val cam = camera?.takeIf { FlatGround.usable(it) } ?: return null
+        val ground = if (layout != null) {
+            FlatGround(cam.focalPx, cam.cx, cam.cy, layout.vpY, layout.cameraHeightMeters ?: FlatGround.heightOf(cam))
+        } else {
+            FlatGround.of(this) ?: return null
+        }
+        return ground.forwardAtRow(o.box.y2)
     }
 
     /** Pedestrians in the ego path, nearest first (unknown distance counts as in range). */

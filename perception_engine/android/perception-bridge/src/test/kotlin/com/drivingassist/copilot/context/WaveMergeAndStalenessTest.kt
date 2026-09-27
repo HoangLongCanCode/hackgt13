@@ -144,7 +144,7 @@ class WaveMergeAndStalenessTest {
         val nav = NavigationState(Maneuver.EXIT, 250.0, "Exit 23B", requiredLanes = listOf(3))
         nowNs = 30_000_000_000L
         var s = world.update(v2(0, objects = listOf(car(7, 6.0), light(42, LightState.RED)), echo = Echo(0, nowNs)).copy(lanes = lanes(1)), receivedAtNs = nowNs)
-        var r = engine.evaluate(s, nav)
+        var r = engine.evaluate(s.copy(laneLayout = TestFrames.layout(ego = 1)), nav)
         assertEquals(FollowingState.CRITICAL, r.context.following.state)
         assertEquals(LaneAction.CHANGE_LANE_RIGHT, r.context.laneGuidance!!.action)
         assertFalse(r.context.perceptionStale)

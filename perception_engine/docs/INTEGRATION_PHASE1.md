@@ -1,8 +1,8 @@
 # phase1 navigation engine integration
 
 How the phase1 navigation engine plugs into the AI Spatial Driving Copilot. The engine is on `main` under `spatial/`
-(merged from branches `louis` and `phase1`); the perception side (`perception_engine/`, branch `long`) calls it
-unchanged. Detailed reference for the relay: [`nav/README.md`](../nav/README.md). Message spec: the Navigation section
+(merged from branches `louis` and `phase1`); the perception side (`perception_engine/`, from branch `long`, also on
+`main`) calls it unchanged. Detailed reference for the relay: [`nav/README.md`](../nav/README.md). Message spec: the Navigation section
 of [`contracts/PROTOCOL_v2.md`](../contracts/PROTOCOL_v2.md).
 
 ## What phase1 is
@@ -21,11 +21,9 @@ phase1 is the project's route engine, written in Node.js with no npm dependencie
 Its output is one `SpatialNavigationPacket` per trip state: progress, active and upcoming maneuvers, spatial and audio
 instructions, route semantics. Its rule, which this integration keeps: **the Android app must not own route logic.**
 
-Known issue on `main` (reported, not changed here): the move to `spatial/` left `spatial/scripts/phase1-demo-lib.js`
-and `spatial/scripts/process-captured-session.js` requiring `../src/phase1`, and `spatial/package.json` still has
-`"main": "src/phase1/index.js"`, so `run-phase1-demo.js`, `process-captured-session.js` and the npm scripts that use
-them fail with "Cannot find module". The relay does not use them: it loads `spatial/phase1/` and
-`spatial/scripts/load-env.js` only.
+`spatial/scripts/*.js` and `spatial/package.json` (`"main": "phase1/index.js"`) point at `spatial/phase1/` (the old
+`../src/phase1` paths from before the move are fixed). The relay does not use those scripts: it loads
+`spatial/phase1/` and `spatial/scripts/load-env.js` only.
 
 ## How it plugs in
 
@@ -117,8 +115,9 @@ phase1's `SpatialNavigationPacket` unchanged; `routeState` is derived 1:1 from i
 | `offRoute`, `etaSeconds`, `remainingDistanceMeters` | `progress.*` | |
 | `requiredLane`, `turnDirection`, `roadName` | `routeSemantics.*` | null |
 
-On the tablet, `BridgeRouteSource` maps `action` / `audio` / `ui` straight onto the overlay's `RouteState`, and
-`NavigationMapper` feeds the Driving Context's lane guidance. Details: [INTERFACES.md](INTERFACES.md#6-navigationpacket-to-routestate).
+On the tablet (`frontend/`), `NavigationMapper` (perception-bridge) feeds the Driving Context's lane guidance, and the
+app's `RouteGuide` reads the packet for the road arrows, the maneuver card and the voice prompts. Details:
+[INTERFACES.md](INTERFACES.md#6-navigationpacket-to-routeguide).
 
 ### Reliability and cost
 
@@ -153,21 +152,19 @@ the default provider is `mock`.
 3. Add `route.json` with phase1's `scripts/process-captured-session.js <repo>/perception_engine/data/nav_sessions`, run
    from the engine folder (its scripts read `.env` from the current folder; from anywhere else they silently fall back
    to the mock provider and the route will not match the drive). Origin and destination come from
-   `PHASE1_DEMO_ORIGIN` / `PHASE1_DEMO_DESTINATION`; `PHASE1_ROUTE_PROVIDER=google` forces Google. On `main` this script
-   fails until its `require('../src/phase1')` is updated (see the known issue above); until then run it from a legacy
-   checkout of the old `phase1` branch, or copy a `route.json` made with the same provider.
+   `PHASE1_DEMO_ORIGIN` / `PHASE1_DEMO_DESTINATION`; `PHASE1_ROUTE_PROVIDER=google` forces Google. Or copy a
+   `route.json` made with the same provider.
 4. Put the video's file name in the manifest's `videoFile`; if the video did not start with the first GPS sample, set
    `videoStartTimestampMs` (epoch ms of video frame 0).
 5. Run the server with `--nav-session data/nav_sessions/phase1/session_<ts>`.
 
 ## Merge status
 
-- `main` holds the navigation engine under `spatial/` and, since this branch's base (`31a22c0`), changed nothing outside
-  `spatial/`. Branch `long` adds `perception_engine/` (the Python engine, `contracts/`, `docs/`, `nav/` and the JVM
-  modules in `android/`), small backward-compatible edits to the AR app in `driving_assist/`, and the root `README.md`,
-  `AGENTS.md`, `CLAUDE.md` and `.github/copilot-instructions.md`. No path overlaps with `spatial/`, so no conflicts are
-  expected when `long` is merged into `main`.
-- After the merge the relay finds `spatial/` with no flags; the old sibling checkout (`../hackgt13-phase1`) is no longer
+- Merged: `main` holds the navigation engine under `spatial/`, `perception_engine/` from branch `long` (the Python
+  engine, `contracts/`, `docs/`, `nav/` and the JVM modules in `android/`) and the tablet app `frontend/` from branch
+  `tom`, which builds the JVM modules. The former repo-root README and AGENTS.md are now
+  `perception_engine/docs/REPO_OVERVIEW.md` and `REPO_AGENTS.md`.
+- The relay finds `spatial/` with no flags; the old sibling checkout (`../hackgt13-phase1`) is no longer
   needed. `--phase1-dir` and `PHASE1_DIR` still work, with either layout.
 
 Check it on a checkout that contains `spatial/` (from `perception_engine/`, no phase1 flags):
@@ -187,7 +184,7 @@ node nav/make_contract_samples.js                                  # golden navi
 | Session and trip-state file format | `spatial/docs/PHASE_1_UPSTREAM_DATA_CONTRACT.md` + `spatial/phase1/session.js` | navigation engine (tell perception: the relay and `client.trip_state` schema follow it) |
 | How packets travel to the tablet, `routeState` derivation, sim time mapping | `perception_engine/nav/relay_core.js`, `perception/realtime/nav_relay.py`, `server.py` `NavWorker` | perception (`perception_engine/`, branch `long`) |
 | Message format | `perception_engine/contracts/PROTOCOL_v2.md`, `contracts/schemas/navigation.packet.schema.json`, `client.trip_state.schema.json`, samples | shared (both sides together) |
-| How the route is shown | `driving_assist` `AROverlay` (AR app, branch `tom`), `BridgeRouteSource`, `NavigationMapper` | AR app / perception |
+| How the route is shown | `frontend/` (`nav/RouteGuide.kt`, `ar/RouteArrows.kt`, the maneuver card in `ui/CopilotScreen.kt`), `NavigationMapper` in perception-bridge | tablet app / perception |
 
 ## phase1 behaviours worth fixing (reported, passed through unchanged)
 
@@ -202,8 +199,6 @@ node nav/make_contract_samples.js                                  # golden navi
    left / right.
 6. The mock provider always returns the same 120 m + 180 m steps whatever its geometry (the demo session generator
    rescales them to the route length).
-7. `spatial/scripts/phase1-demo-lib.js` and `process-captured-session.js` still `require('../src/phase1')`, and
-   `spatial/package.json` `main` is `src/phase1/index.js` (paths from before the move to `spatial/`).
 
 ## Tests
 

@@ -56,11 +56,16 @@ class Camera:
 
 
 def ground_distance(y_b: float, y_h: float, cam: Camera, cam_height_m: Optional[float] = None) -> Optional[float]:
-    """Flat-ground forward distance from the bbox bottom row; None if at/above the horizon."""
+    """Flat-ground forward distance from the bbox bottom row; None if at/above the horizon.
+
+    Also None for non-finite inputs and for a ray at/behind the vertical (a bogus horizon far above the image).
+    """
     hc = cam.height_m if cam_height_m is None else cam_height_m
+    if not (cam.focal_px > 0 and all(map(math.isfinite, (y_b, y_h, hc)))):
+        return None
     theta = math.atan((cam.cy - y_h) / cam.focal_px)
     ang = theta + math.atan((y_b - cam.cy) / cam.focal_px)
-    if ang <= math.radians(0.05):
+    if not (math.radians(0.05) < ang < math.radians(89.9)):
         return None
     return hc / math.tan(ang)
 
@@ -85,6 +90,8 @@ def size_distances(cls: str, box: Sequence[float], cam: Camera, border_px: float
         return out
     W, Hh, sw, sh = pri
     x1, y1, x2, y2 = box
+    if not all(map(math.isfinite, (x1, y1, x2, y2))):  # max(1.0, nan) is 1.0: a NaN box would read as 1 px
+        return out
     w_px, h_px = max(1.0, x2 - x1), max(1.0, y2 - y1)
     cut_lr = x1 <= border_px or x2 >= cam.width - 1 - border_px
     cut_tb = y1 <= border_px or y2 >= cam.height - 1 - border_px
@@ -112,12 +119,18 @@ def virtual_horizon(dets: Iterable[tuple[str, Sequence[float]]], cam: Camera,
     """Horizon row from object height priors (independent of any depth model).
 
     y_h_i = y_b - H_c * h_px / H_obj for untruncated cars/buses/pedestrians;
-    returns (y_h, sigma_px, n) as an inverse-variance weighted median-ish mean.
+    returns (y_h, sigma_px, n) as an inverse-variance weighted median-ish mean,
+    or None when no cue survives (no usable box, or the cues disagree so much
+    that none lies near their median, e.g. two boxes with a median between them).
     """
     hc = cam.height_m if cam_height_m is None else cam_height_m
+    if not (math.isfinite(hc) and hc > 0):
+        return None
     vals, sig = [], []
     for cls, (x1, y1, x2, y2) in dets:
         if cls not in ("car", "bus", "pedestrian"):
+            continue
+        if not all(map(math.isfinite, (x1, y1, x2, y2))):
             continue
         if y1 <= 2 or y2 >= cam.height - 3 or x1 <= 2 or x2 >= cam.width - 3:
             continue
@@ -135,9 +148,13 @@ def virtual_horizon(dets: Iterable[tuple[str, Sequence[float]]], cam: Camera,
     keep = np.abs(v - med) <= 3 * np.maximum(s, 4.0)
     v, s = v[keep], s[keep]
     w = 1.0 / s ** 2
-    yh = float(np.sum(w * v) / np.sum(w))
-    sy = float(1.0 / math.sqrt(np.sum(w)))
-    return yh, max(sy, 2.0), int(len(v))
+    sw = float(np.sum(w))
+    if not (math.isfinite(sw) and sw > 0):  # nothing kept: an empty sum used to raise ZeroDivisionError
+        return None
+    yh = float(np.sum(w * v) / sw)
+    if not math.isfinite(yh):
+        return None
+    return yh, max(1.0 / math.sqrt(sw), 2.0), int(len(v))
 
 
 @dataclass
@@ -254,6 +271,8 @@ def fit_road_profile(depth: np.ndarray, cam: Camera, boxes: Sequence[Sequence[fl
             return None
         a, b = float(sol[0]), float(sol[1])
     lo, hi = _longest_run(inliers(a, b))
+    if hi - lo < 10 or not (math.isfinite(a) and math.isfinite(b) and cam.focal_px * a > 0):
+        return None  # the last refit can shrink the run (empty mean, ys[hi - 1] wrap) or leave a degenerate slope
     r = iv[lo:hi] - (a * ys[lo:hi] + b)
     yh = -b / a
     hd = 1.0 / (cam.focal_px * a)

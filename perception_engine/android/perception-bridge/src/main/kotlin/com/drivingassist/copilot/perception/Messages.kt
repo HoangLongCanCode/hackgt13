@@ -95,6 +95,9 @@ data class HelloMessage(
     /** `navigation.error`, e.g. why the relay failed to start. */
     val navigationError: String? get() = navField("error")?.takeIf { it.isString }?.content
 
+    /** Live navigation target the laptop builds the route for (`navigation.destination`), null in sim / before one. */
+    val navigationDestination: String? get() = navField("destination")?.takeIf { it.isString }?.content
+
     private fun navField(key: String): JsonPrimitive? = ((navigation as? JsonObject)?.get(key)) as? JsonPrimitive
 
     /** True when this server takes v2 `SDC1` camera frames (a v1 server's 8-byte uplink is not compatible). */
@@ -286,11 +289,25 @@ data class NavigationPacketMessage(
     val routeState: NavRouteState? = null,
     /** Verbatim phase1 `SpatialNavigationPacket` (free-form JSON). */
     val packet: JsonObject? = null,
+    /** Posted speed limit of the road at the packet's position (laptop `--speed-limits osm`); null = off or unknown. */
+    val speedLimit: NavSpeedLimit? = null,
 ) : PerceptionMessage {
     companion object {
         const val TYPE = "navigation.packet"
     }
 }
+
+/** `navigation.packet.speedLimit`: the map's posted limit for the road the car is on (mph only). */
+@Serializable
+data class NavSpeedLimit(
+    val valueMph: Int,
+    /** "osm" (OpenStreetMap `maxspeed`, looked up by the laptop). */
+    val source: String = "osm",
+    val roadName: String? = null,
+    val wayId: Long? = null,
+    /** Laptop epoch ms of the lookup that produced it. */
+    val queriedAtMs: Long? = null,
+)
 
 /**
  * `navigation.packet.routeState`. [action] / [audio] / [ui] map 1:1 onto the AR app's
@@ -299,6 +316,9 @@ data class NavigationPacketMessage(
  *   MERGE, EXIT_HIGHWAY, ARRIVE, START_ROUTE.
  * - [audio] = `audioInstructions[0].content`, [ui] = `spatialInstructions[0].type`
  *   (TURN_ARROW, LANE_ARROW, EXIT_MARKER, DISTANCE_LABEL, WARNING).
+ *
+ * The Driving Context and the app guide towards `NavigationMapper.target` instead: the same maneuver, or the next
+ * real one when [action] is only GO_STRAIGHT / START_ROUTE.
  */
 @Serializable
 data class NavRouteState(
@@ -316,6 +336,40 @@ data class NavRouteState(
     /** left | right | straight | merge | exit */
     val turnDirection: String? = null,
     val roadName: String? = null,
+)
+
+/**
+ * `navigation.places`: the laptop's answer to one `client.place_search` ([requestId] echoed), sent to the searching
+ * client only. At most 8 [places], best first. On failure [places] is empty and [error] says why ("rate limited",
+ * the provider's message; never a key). [provider] is "google" or "mock".
+ */
+@Serializable
+@SerialName(NavigationPlacesMessage.TYPE)
+data class NavigationPlacesMessage(
+    val schemaVersion: Int = 2,
+    val serverTimeMs: Long? = null,
+    val requestId: String? = null,
+    val query: String = "",
+    val provider: String? = null,
+    val places: List<PlaceResult> = emptyList(),
+    val error: String? = null,
+) : PerceptionMessage {
+    companion object {
+        const val TYPE = "navigation.places"
+    }
+}
+
+/** One `navigation.places` result; picked with `client.destination` (query = [label], plus [placeId] and [location]). */
+@Serializable
+data class PlaceResult(
+    val placeId: String? = null,
+    /** Display name, e.g. "Foxtail Coffee - Society Atlanta". */
+    val label: String,
+    /** Formatted address. */
+    val address: String? = null,
+    val location: GeoPoint,
+    /** Straight-line distance from the search's `near` (null without it). */
+    val distanceMeters: Double? = null,
 )
 
 /** A message whose `type` this client does not know. Returned, not thrown, so newer servers still work. */

@@ -113,6 +113,49 @@ data class ClientPing(val clientTimeNs: Long) : ClientMessage {
     }
 }
 
+/**
+ * `client.destination` (live navigation): where to go, as typed by the user (a place or address). The laptop's
+ * phase1 provider (mock or Google Geocoding + Routes) resolves it and builds the route from the next
+ * `client.trip_state`; `perception.hello` `navigation.destination` echoes the current target.
+ *
+ * A place picked from `navigation.places` also carries its [location] (and [placeId]): the laptop then routes to
+ * exactly that point without geocoding [query], which is only the label. Both are omitted from the JSON when null,
+ * so a typed destination stays `{"type":"client.destination","query":"..."}`.
+ */
+@Serializable
+@SerialName(ClientDestination.TYPE)
+data class ClientDestination(
+    val query: String,
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val placeId: String? = null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val location: GeoPoint? = null,
+) : ClientMessage {
+    companion object {
+        const val TYPE = "client.destination"
+        const val MAX_LENGTH = 200
+        const val MAX_PLACE_ID_LENGTH = 256
+    }
+}
+
+/**
+ * `client.place_search` (live navigation): free-text search for a destination ("coffee", "Piedmont Park", an
+ * address), biased around [near] (the latest GPS fix, null = no bias). The laptop answers this client only with
+ * one [NavigationPlacesMessage] echoing [requestId]. Sent on submit, never per keystroke.
+ */
+@Serializable
+@SerialName(ClientPlaceSearch.TYPE)
+data class ClientPlaceSearch(
+    val requestId: String,
+    val query: String,
+    val near: GeoPoint? = null,
+) : ClientMessage {
+    companion object {
+        const val TYPE = "client.place_search"
+        const val MAX_LENGTH = 200
+    }
+}
+
 /** `[lat, lng]` in degrees (WGS84), phase1 `GeoCoordinate`. */
 @Serializable
 data class GeoPoint(val lat: Double, val lng: Double)

@@ -40,6 +40,31 @@ function decodePolyline(encoded) {
   return coordinates;
 }
 
+/** Google encoded-polyline algorithm (precision 1e5), the inverse of decodePolyline. */
+function encodePolyline(points) {
+  let lastLat = 0;
+  let lastLng = 0;
+  let out = '';
+  const encodeValue = (value) => {
+    let v = value < 0 ? ~(value << 1) : value << 1;
+    let chunk = '';
+    while (v >= 0x20) {
+      chunk += String.fromCharCode((0x20 | (v & 0x1f)) + 63);
+      v >>= 5;
+    }
+    return chunk + String.fromCharCode(v + 63);
+  };
+  for (const point of points || []) {
+    const lat = Math.round(point.lat * 1e5);
+    const lng = Math.round(point.lng * 1e5);
+    out += encodeValue(lat - lastLat) + encodeValue(lng - lastLng);
+    lastLat = lat;
+    lastLng = lng;
+  }
+  return out;
+}
+
 module.exports = {
   decodePolyline,
+  encodePolyline,
 };

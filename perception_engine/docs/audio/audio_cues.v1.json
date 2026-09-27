@@ -1,0 +1,388 @@
+{
+  "schema": "audio_cues.v1",
+  "description": "Machine-readable catalog for AUDIO_CUE_RULES.md sections 5 to 11: the single source for every number and phrase there. Change both files together.",
+  "normative": ["numbers", "text", "template", "priority", "class", "earcon", "voiceProfile", "enabledByDefault", "fixedPhrases", "maneuverPhrases", "speakDistanceImperial", "speakDistanceMetric", "roadAbbreviations", "eventDispositions"],
+  "informative": ["condition", "trigger", "revalidate", "note"],
+  "language": "en-US",
+  "speechUnits": "IMPERIAL",
+  "speechRegex": "^[A-Z][A-Za-z ,'-]*\\.$",
+  "priorities": ["CRITICAL_SAFETY", "TRAFFIC_ALERT", "IMMEDIATE_NAVIGATION", "UPCOMING_NAVIGATION", "GENERAL_INFORMATION", "SOCIAL"],
+  "ttlMsByPriority": { "CRITICAL_SAFETY": 1000, "TRAFFIC_ALERT": 1500, "IMMEDIATE_NAVIGATION": 3000, "UPCOMING_NAVIGATION": 6000, "GENERAL_INFORMATION": 5000, "SOCIAL": 30000 },
+  "readinessDeadlineMsByPriority": { "CRITICAL_SAFETY": 0, "TRAFFIC_ALERT": 0, "IMMEDIATE_NAVIGATION": 400, "UPCOMING_NAVIGATION": 800, "GENERAL_INFORMATION": 1000, "SOCIAL": 1000 },
+  "maxWordsByPriority": { "CRITICAL_SAFETY": 3, "TRAFFIC_ALERT": 4, "IMMEDIATE_NAVIGATION": 9, "UPCOMING_NAVIGATION": 12, "GENERAL_INFORMATION": 6, "SOCIAL": 15 },
+  "maxWordsImmediateWithThen": 12,
+  "overflowChain": ["dropThen", "destinationToYourDestination", "dropOnto", "bankedStreetlessForm"],
+  "voiceProfiles": {
+    "nav": { "stability": 0.6, "similarity_boost": 0.75, "style": 0.0, "use_speaker_boost": true, "speed": 1.0 },
+    "alert": { "stability": 0.6, "similarity_boost": 0.75, "style": 0.0, "use_speaker_boost": true, "speed": 1.1 },
+    "social": { "note": "reserved; a different voice from nav and alert" }
+  },
+  "elevenlabs": {
+    "endpoint": "POST https://api.elevenlabs.io/v1/text-to-speech/{voice_id}?output_format=pcm_24000",
+    "outputFormatIsQueryParameter": true,
+    "modelId": "eleven_flash_v2_5",
+    "outputFormat": "pcm_24000",
+    "expectedPcm": "headerless s16le mono 24000 Hz (verify on day one)",
+    "languageCode": "en",
+    "languageCodeOnlyForModels": ["eleven_flash_v2_5"],
+    "applyTextNormalization": "off",
+    "seed": 20260926,
+    "voiceIdEnv": "ELEVENLABS_VOICE_ID",
+    "apiKeyEnv": "ELEVENLABS_API_KEY",
+    "cacheKey": "sha256 hex of text|voice_id|model_id|settings_json_sorted_no_spaces|output_format|seed|language_code|apply_text_normalization|dictionary_id@version"
+  },
+  "earcons": {
+    "E1": { "use": "CRITICAL_SAFETY", "pulseMs": 55, "gapMs": 40, "pulsesBeforeSpeech": 2, "pulsesAlone": 3, "gapBeforeSpeechMs": 40, "fundamentalHz": 1000, "components": [{ "hz": 3000, "gainDb": -6 }], "rampMs": 5, "peakDbfs": -1 },
+    "E2": { "use": "TRAFFIC_ALERT", "tones": [{ "hz": 880, "ms": 100 }, { "hz": 660, "ms": 100 }], "gapMs": 40, "harmonic2GainDb": -8, "rampMs": 5, "gapBeforeSpeechMs": 60, "peakDbfs": -4 },
+    "E3": { "use": "navigation", "enabledByDefault": false, "tones": [{ "hz": 523, "ms": 150 }, { "hz": 784, "ms": 150 }], "simultaneous": true, "rampMs": 5, "gapBeforeSpeechMs": 60, "peakDbfs": -10 }
+  },
+  "gates": {
+    "PERCEPTION": ["notStale", "linkConnected", "notTakenOver", "notWatcher", "simPlaying", "hostVisible", "voiceModeAllows", "afterWarmup"],
+    "NAVIGATION": ["hostVisible", "simPlaying", "notTakenOver", "notWatcher", "voiceModeAllows"],
+    "SYSTEM": ["hostVisible", "simPlaying", "voiceModeAllows"],
+    "perceptionWarmupMs": 500
+  },
+  "cues": [
+    {
+      "id": "safety.vehicle_too_close", "class": "PERCEPTION", "family": "following", "priority": "CRITICAL_SAFETY", "enabledByDefault": true,
+      "condition": "following.state == CRITICAL, distanceMeters != null, and the voiced trigger of AUDIO_CUE_RULES.md 5.3",
+      "persistenceMs": 250, "sameLeadDuringPersistence": true, "episodeEndMs": 2000, "maxPerEpisode": 3, "minRepeatMs": 8000,
+      "voicedTrigger": {
+        "exitDistanceMeters": 9.0, "exitTtcSeconds": 2.5, "exitHeadwaySeconds": 1.0,
+        "distance": { "closingAtMostMps": -0.5, "orMeasuredSpeedAtLeastMps": 2.8 },
+        "ttc": { "closingAtMostMps": -1.0, "rangeRateTtcMaxSeconds": 3.0, "closingAtMostMeasuredSpeedPlusMps": 3.0 },
+        "headwayOnly": "displayOnly"
+      },
+      "escalation": { "distanceRatio": 0.6, "ttcSeconds": 1.5, "minGapMs": 2000 },
+      "earcon": "E1", "earconOnlyWhen": "new episode within minRepeatMs of the last speech, without escalation",
+      "text": "Vehicle too close.", "voiceProfile": "alert", "revalidate": "the voiced condition holds"
+    },
+    {
+      "id": "safety.pedestrian_critical", "class": "PERCEPTION", "family": "pedestrian", "priority": "CRITICAL_SAFETY", "enabledByDefault": true,
+      "condition": "nearest pedestriansInPath has distanceMeters <= 12 || ttcSeconds <= 3; not while stopped (speed gate on and navigation.egoSpeedMps known and below DrivingContextConfig.criticalMinEgoSpeedMps)",
+      "persistenceMs": 200, "sharesEpisodeWith": "alert.pedestrian", "episodeEndMs": 2000, "maxPerEpisode": 2, "minRepeatMs": 6000,
+      "escalation": { "skipTrafficCueIfCriticalWithinMs": 500, "earconOnlyIfTrafficSpeechFinishedWithinMs": 4000, "neverCutsTrafficCueOfSameEpisode": true },
+      "earcon": "E1", "text": "Pedestrian very close.", "voiceProfile": "alert", "revalidateWindowMs": 1000,
+      "revalidate": "a pedestrian was in path within the last revalidateWindowMs"
+    },
+    {
+      "id": "alert.pedestrian", "class": "PERCEPTION", "family": "pedestrian", "priority": "TRAFFIC_ALERT", "enabledByDefault": true,
+      "condition": "pedestriansInPath not empty and not critical; not while stopped (as safety.pedestrian_critical)",
+      "persistenceMs": 200, "sharesEpisodeWith": "safety.pedestrian_critical", "episodeEndMs": 2000, "maxPerEpisode": 1, "minRepeatMs": 6000,
+      "earcon": "E2", "text": "Pedestrian ahead.", "voiceProfile": "alert", "revalidateWindowMs": 1000,
+      "revalidate": "a pedestrian was in path within the last revalidateWindowMs"
+    },
+    {
+      "id": "alert.red_light", "class": "PERCEPTION", "family": "light", "priority": "TRAFFIC_ALERT", "enabledByDefault": true,
+      "condition": "trafficLight.state == RED on the same trackId for persistenceMs; rawLightState == RED and lightConfidence null or >= minConfidence at creation and start; |lateral| <= maxLateralMeters when known; minMeters <= distance <= maxMeters; if vMeasured known: vMeasured >= minMeasuredSpeedMps and v^2 / (2 * max(0.1, d - v * reactionSeconds)) <= maxDecelMps2",
+      "persistenceMs": 500, "minMeters": 15, "maxMeters": 60, "minConfidence": 0.6, "maxLateralMeters": 6,
+      "minMeasuredSpeedMps": 2.8, "maxDecelMps2": 4.9, "reactionSeconds": 1.0,
+      "episodeEndMs": 3000, "maxPerEpisode": 1, "minRepeatMs": 20000,
+      "earcon": "E2", "text": "Red light ahead.", "voiceProfile": "alert", "revalidate": "same track still RED"
+    },
+    {
+      "id": "alert.stop_sign", "class": "PERCEPTION", "family": "sign", "priority": "TRAFFIC_ALERT", "enabledByDefault": false, "flag": "speakStopSigns",
+      "condition": "at least minReads reads with isStop on one sign key, confidence >= minConfidence, distance <= maxMeters",
+      "minReads": 3, "minConfidence": 0.8, "maxMeters": 50, "persistenceMs": 0, "episodeEndMs": 5000, "maxPerEpisode": 1, "minRepeatMs": 20000,
+      "earcon": "E2", "text": "Stop sign ahead.", "voiceProfile": "alert", "revalidate": "sign still present"
+    },
+    {
+      "id": "alert.vehicle_close", "class": "PERCEPTION", "family": "following", "priority": "TRAFFIC_ALERT", "enabledByDefault": false, "flag": "speakVehicleClose",
+      "condition": "following.state == CLOSE",
+      "persistenceMs": 1000, "episodeEndMs": 3000, "maxPerEpisode": 1, "minRepeatMs": 15000,
+      "earcon": "E2", "text": "Vehicle close ahead.", "voiceProfile": "alert", "revalidate": "following.state in (CLOSE, CRITICAL)"
+    },
+    {
+      "id": "info.speed_limit", "class": "PERCEPTION", "family": "sign", "priority": "GENERAL_INFORMATION", "enabledByDefault": false, "flag": "speakSpeedLimit",
+      "condition": "N in allowedValues read >= minReads times with confidence >= minConfidence on one sign key, the reads span >= dwellMs of lastSeenPts, no other value read on any sign in the last otherValueQuietMs, and if vMeasured known not (vMeasured - 0.447 * N > maxDropMps)",
+      "allowedValues": [10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85],
+      "minReads": 3, "minConfidence": 0.9, "dwellMs": 1000, "otherValueQuietMs": 10000, "maxDropMps": 9.0,
+      "minRepeatBetweenValuesMs": 10000, "repeatSameValue": false, "newerValueReplacesQueued": true,
+      "earcon": null, "template": "Speed limit {speedLimitWords}.", "voiceProfile": "nav", "revalidate": "context.speedLimit == N"
+    },
+    {
+      "id": "info.road_alerts_paused", "class": "SYSTEM", "family": "system", "priority": "GENERAL_INFORMATION", "enabledByDefault": true,
+      "condition": "stale for >= staleMs of the last windowMs (restores shorter than shortRestoreMs count as stale), or link down / takenOver for windowMs; after >= minGoodPerceptionMs of good perception since app start",
+      "windowMs": 3000, "staleMs": 2500, "shortRestoreMs": 500, "minGoodPerceptionMs": 1000,
+      "episodeEndMs": 2000, "maxPerEpisode": 1, "minRepeatMs": 60000, "survivesSessionChange": true, "allowedWhileTakenOver": true,
+      "earcon": null, "text": "Road alerts paused.", "voiceProfile": "nav", "revalidate": "still stale"
+    },
+    {
+      "id": "info.road_alerts_back", "class": "SYSTEM", "family": "system", "priority": "GENERAL_INFORMATION", "enabledByDefault": true,
+      "condition": "persistenceMs of continuous good perception after a spoken info.road_alerts_paused",
+      "persistenceMs": 2000, "maxPerPausedEpisode": 1,
+      "earcon": null, "text": "Road alerts back.", "voiceProfile": "nav", "revalidate": "not stale"
+    },
+    {
+      "id": "nav.start", "class": "NAVIGATION", "family": "nav", "priority": "UPCOMING_NAVIGATION", "enabledByDefault": true, "scope": "routeKey",
+      "trigger": "first settled target of a new routeKey", "template": "Starting route to {destination}.", "voiceProfile": "nav"
+    },
+    {
+      "id": "nav.continue", "class": "NAVIGATION", "family": "nav", "priority": "UPCOMING_NAVIGATION", "enabledByDefault": true, "scope": "eventKey",
+      "trigger": "once per eventKey: a settled target (a spoken maneuver or ARRIVE; not FOLLOW_ROAD or STOP) with d >= max(continueMinSeconds * v, continueMinMeters) and d - (P(v) + v * leadS) >= v * continueMinGapSeconds, so it never plays right before nav.prepare (nor in the same step as nav.prepare / nav.immediate)",
+      "template": "Drive straight for {distance}.", "lateBinding": ["distance"], "voiceProfile": "nav"
+    },
+    {
+      "id": "nav.prepare", "class": "NAVIGATION", "family": "nav", "priority": "UPCOMING_NAVIGATION", "enabledByDefault": true, "scope": "eventKey",
+      "trigger": "d <= P(v) + v * leadS, once per eventKey, not within postManeuverHoldMs after a pass; skipped (logged) when d - I(v) < v * skipPrepareIfImmediateWithinS",
+      "template": "In {distance}, {maneuver}{onto}.", "lateBinding": ["distance"], "dropAtBindIf": "d - I(v) < v * (duration + 1 s)", "voiceProfile": "nav"
+    },
+    {
+      "id": "nav.immediate", "class": "NAVIGATION", "family": "nav", "priority": "IMMEDIATE_NAVIGATION", "enabledByDefault": true, "scope": "eventKey",
+      "trigger": "minExecutableMeters <= d <= I(v), once per eventKey; after a chained immediate the next one waits postManeuverHoldMs unless d < 3 s * v",
+      "template": "{Maneuver}{onto}{then}.",
+      "liveUncertainTemplate": "In {distance}, {maneuver}{onto}.",
+      "liveUncertainWhen": "LIVE and (lastTripAccuracyMeters unknown or > immediateMaxAccuracyMeters, or {onto} empty); never fires when d < lastTripAccuracyMeters",
+      "dropWhen": "d < minExecutableMeters", "voiceProfile": "nav"
+    },
+    {
+      "id": "nav.arrive_prepare", "class": "NAVIGATION", "family": "nav", "priority": "UPCOMING_NAVIGATION", "enabledByDefault": true, "scope": "eventKey",
+      "trigger": "target is ARRIVE, d <= P(v) + v * leadS, once per eventKey, not within postManeuverHoldMs after a pass; skipped when d - arrivedMeters < v * skipPrepareIfImmediateWithinS",
+      "template": "In {distance}, you will arrive at {destination}.", "lateBinding": ["distance"], "dropAtBindIf": "d - arrivedMeters < v * (duration + 1 s)", "voiceProfile": "nav"
+    },
+    {
+      "id": "nav.arrived", "class": "NAVIGATION", "family": "nav", "priority": "IMMEDIATE_NAVIGATION", "enabledByDefault": true, "scope": "eventKey",
+      "trigger": "target is ARRIVE and d <= arrivedMeters; in LIVE only when packet.source.provider != mock", "ttlMs": 5000,
+      "template": "You have arrived at {destination}.", "voiceProfile": "nav"
+    },
+    {
+      "id": "nav.off_route", "class": "NAVIGATION", "family": "nav", "priority": "UPCOMING_NAVIGATION", "enabledByDefault": false, "flag": "speakOffRoute", "scope": "routeKey",
+      "trigger": "offRoute true for max(offRouteDebounceMs, offRouteMinTravelMeters of travel); in LIVE only when lastTripAccuracyMeters <= offRouteMaxAccuracyMeters",
+      "minRepeatMs": 60000, "text": "You are off route.", "voiceProfile": "nav"
+    },
+    {
+      "id": "nav.back_on_route", "class": "NAVIGATION", "family": "nav", "priority": "GENERAL_INFORMATION", "enabledByDefault": false, "flag": "speakBackOnRoute", "scope": "routeKey",
+      "trigger": "offRoute false for offRouteDebounceMs after a spoken nav.off_route", "text": "Back on route.", "voiceProfile": "nav"
+    },
+    {
+      "id": "nav.paused", "class": "NAVIGATION", "family": "nav", "priority": "GENERAL_INFORMATION", "enabledByDefault": false, "flag": "speakNavPaused", "scope": "routeKey",
+      "trigger": "navigation.stale becomes true while a route was active (LIVE, or SIM playing)", "text": "Navigation paused.", "voiceProfile": "nav"
+    },
+    {
+      "id": "lane.change_left", "class": "PERCEPTION", "family": "lane", "priority": "UPCOMING_NAVIGATION", "enabledByDefault": true, "flag": "speakLaneChange", "scope": "eventKey",
+      "trigger": "over the policy steps of the last evidenceWindowMs (a full window of this event key; a new event key starts over): laneGuidance.action == CHANGE_LANE_LEFT in >= evidenceShare of them, and a world laneLayout (built from the detected lane lines) present, stable, age <= maxAgeSeconds and quality >= minLayoutQuality in >= evidenceShare of them, and CHANGE_LANE_LEFT within the last lastAskWithinMs (a share, not a continuous run: the layout may lose a lane behind the A-pillar now and then); every PERCEPTION gate; route present, not stale, not off route; d known and d - I(v) >= v * (duration + 1 s) for its text; laneHintInferred == false unless allowInferredLaneSide; once per (eventKey, side), a dropped request re-arms; not made when the event key already has, or still has due, maxPresentationsPerEventKey presentations",
+      "evidenceWindowMs": 2000, "evidenceShare": 0.7, "lastAskWithinMs": 500, "revalidateWindowMs": 1000, "minLayoutQuality": 0.5, "maxAgeSeconds": 1.0, "allowInferredLaneSide": true, "neverCuts": true, "ttlMs": 3000,
+      "text": "Move to the left lane, check for cars.", "textForTurn": "Move to the left lane for the turn, check for cars.", "textForExit": "Move to the left lane for the exit, check for cars.",
+      "textSide": "Move left, check for cars.", "textSideForTurn": "Move left for the turn, check for cars.", "textSideForExit": "Move left for the exit, check for cars.", "voiceProfile": "nav",
+      "note": "check for cars asks the driver to look; it never says the lane is free. TURN_LEFT / TURN_RIGHT use textForTurn, an exit (EXIT, or KEEP_* with an exit number) textForExit, anything else text. text / textForTurn / textForExit name the edge lane ('the right lane'), so they are used only when the target lanes include the edge lane on that side (laneCount for right, 1 for left) or the side was inferred; a middle target (a numeric requiredLane) uses textSide / textSideForTurn / textSideForExit, which say the side only. No lane number or count is spoken",
+      "revalidate": "at start the same event key, every condition of the last step but the evidence (gates, route, d - I(v) margin), and the same side asked for in more than half of the steps of the last revalidateWindowMs"
+    },
+    {
+      "id": "lane.change_right", "class": "PERCEPTION", "family": "lane", "priority": "UPCOMING_NAVIGATION", "enabledByDefault": true, "flag": "speakLaneChange", "scope": "eventKey",
+      "trigger": "over the policy steps of the last evidenceWindowMs (a full window of this event key; a new event key starts over): laneGuidance.action == CHANGE_LANE_RIGHT in >= evidenceShare of them, and a world laneLayout (built from the detected lane lines) present, stable, age <= maxAgeSeconds and quality >= minLayoutQuality in >= evidenceShare of them, and CHANGE_LANE_RIGHT within the last lastAskWithinMs (a share, not a continuous run: the layout may lose a lane behind the A-pillar now and then); every PERCEPTION gate; route present, not stale, not off route; d known and d - I(v) >= v * (duration + 1 s) for its text; laneHintInferred == false unless allowInferredLaneSide; once per (eventKey, side), a dropped request re-arms; not made when the event key already has, or still has due, maxPresentationsPerEventKey presentations",
+      "evidenceWindowMs": 2000, "evidenceShare": 0.7, "lastAskWithinMs": 500, "revalidateWindowMs": 1000, "minLayoutQuality": 0.5, "maxAgeSeconds": 1.0, "allowInferredLaneSide": true, "neverCuts": true, "ttlMs": 3000,
+      "text": "Move to the right lane, check for cars.", "textForTurn": "Move to the right lane for the turn, check for cars.", "textForExit": "Move to the right lane for the exit, check for cars.",
+      "textSide": "Move right, check for cars.", "textSideForTurn": "Move right for the turn, check for cars.", "textSideForExit": "Move right for the exit, check for cars.", "voiceProfile": "nav",
+      "note": "check for cars asks the driver to look; it never says the lane is free. TURN_LEFT / TURN_RIGHT use textForTurn, an exit (EXIT, or KEEP_* with an exit number) textForExit, anything else text. text / textForTurn / textForExit name the edge lane ('the right lane'), so they are used only when the target lanes include the edge lane on that side (laneCount for right, 1 for left) or the side was inferred; a middle target (a numeric requiredLane) uses textSide / textSideForTurn / textSideForExit, which say the side only. No lane number or count is spoken",
+      "revalidate": "at start the same event key, every condition of the last step but the evidence (gates, route, d - I(v) margin), and the same side asked for in more than half of the steps of the last revalidateWindowMs"
+    }
+  ],
+  "neverSpoken": [
+    "TRAFFIC_LIGHT_GREEN", "TRAFFIC_LIGHT_YELLOW", "LightState.UNKNOWN", "FOLLOWING_NORMAL", "ROAD_SIGN", "KEEP_LANE",
+    "STOP maneuver", "PERCEPTION_LOST and PERCEPTION_RESTORED edges", "headway-only CRITICAL", "numeric TTC", "object distances",
+    "lane numbers and lane counts", "navigation engine audio text", "app RouteState.audio", "DrivingEvent.speech"
+  ],
+  "eventDispositions": {
+    "KEEP_LANE": { "audio": "displayOnly" },
+    "CHANGE_LANE_LEFT": { "audio": "spoken", "cues": ["lane.change_left"] },
+    "CHANGE_LANE_RIGHT": { "audio": "spoken", "cues": ["lane.change_right"] },
+    "MERGE_LEFT": { "audio": "spoken", "cues": ["nav.prepare", "nav.immediate"] },
+    "MERGE_RIGHT": { "audio": "spoken", "cues": ["nav.prepare", "nav.immediate"] },
+    "MERGE": { "audio": "spoken", "cues": ["nav.prepare", "nav.immediate"] },
+    "KEEP_LEFT": { "audio": "spoken", "cues": ["nav.prepare", "nav.immediate"] },
+    "KEEP_RIGHT": { "audio": "spoken", "cues": ["nav.prepare", "nav.immediate"] },
+    "TURN_LEFT": { "audio": "spoken", "cues": ["nav.prepare", "nav.immediate"] },
+    "TURN_RIGHT": { "audio": "spoken", "cues": ["nav.prepare", "nav.immediate"] },
+    "EXIT": { "audio": "spoken", "cues": ["nav.prepare", "nav.immediate"] },
+    "ENTER_HIGHWAY": { "audio": "spoken", "cues": ["nav.prepare", "nav.immediate"] },
+    "FOLLOW_ROAD": { "audio": "displayOnly", "note": "GO_STRAIGHT / START_ROUTE legs are skipped for the next real maneuver, whose nav.continue says Drive straight for {distance} when it is far; a FOLLOW_ROAD target (nothing but road ahead, or an unknown engine type) is not spoken" },
+    "STOP": { "audio": "displayOnly" },
+    "ARRIVE": { "audio": "spoken", "cues": ["nav.arrive_prepare", "nav.arrived"] },
+    "VEHICLE_TOO_CLOSE": { "audio": "spokenWhenVoiced", "cues": ["safety.vehicle_too_close"] },
+    "FOLLOWING_CLOSE": { "audio": "offByDefault", "cues": ["alert.vehicle_close"] },
+    "FOLLOWING_NORMAL": { "audio": "displayOnly" },
+    "TRAFFIC_LIGHT_RED": { "audio": "spoken", "cues": ["alert.red_light"] },
+    "TRAFFIC_LIGHT_YELLOW": { "audio": "displayOnly" },
+    "TRAFFIC_LIGHT_GREEN": { "audio": "displayOnly" },
+    "PEDESTRIAN_IN_PATH": { "audio": "spoken", "cues": ["alert.pedestrian", "safety.pedestrian_critical"] },
+    "STOP_SIGN": { "audio": "offByDefault", "cues": ["alert.stop_sign"] },
+    "SPEED_LIMIT": { "audio": "offByDefault", "cues": ["info.speed_limit"] },
+    "ROAD_SIGN": { "audio": "displayOnly" },
+    "PERCEPTION_LOST": { "audio": "debounced", "cues": ["info.road_alerts_paused"] },
+    "PERCEPTION_RESTORED": { "audio": "debounced", "cues": ["info.road_alerts_back"] }
+  },
+  "navigation": {
+    "defaultSpeedMps": 11.2,
+    "extrapolateUnknownSpeedWith": 0.0,
+    "speedEstimateWindowSeconds": [3, 10],
+    "speedEstimateClampMps": [0.5, 45.0],
+    "maxExtrapolationS": 2.0,
+    "leadS": 1.0,
+    "prepareMetersBySpeed": [
+      { "belowMps": 19.4, "meters": 300 },
+      { "belowMps": 25.0, "meters": 805 },
+      { "belowMps": null, "meters": 1609.344 }
+    ],
+    "immediate": { "seconds": 7.0, "minMeters": 45, "maxMeters": 200 },
+    "skipPrepareIfImmediateWithinS": 4.0,
+    "postManeuverHoldMs": 3000,
+    "arrivedMeters": 15,
+    "minExecutableMeters": 10,
+    "thenChain": { "seconds": 12, "minMeters": 60 },
+    "continueMinSeconds": 60,
+    "continueMinMeters": 1609.344,
+    "continueMinGapSeconds": 30,
+    "settle": { "ms": 500, "packets": 2 },
+    "simLeftoverMaxSeconds": 2.0,
+    "targetSkipsTypes": ["GO_STRAIGHT", "START_ROUTE"],
+    "offRouteDebounceMs": 3000,
+    "offRouteMinTravelMeters": 60,
+    "offRouteMaxAccuracyMeters": 25,
+    "immediateMaxAccuracyMeters": 20,
+    "maxPresentationsPerEventKey": 3,
+    "workloadLockoutAfterManeuverMs": 5000,
+    "workloadLockoutMaxMs": 20000
+  },
+  "arbiter": {
+    "queueMax": 4,
+    "minGapMs": 700,
+    "trafficAfterBlockMs": 500,
+    "trafficCutsImmediateIfRemainingMs": 1000,
+    "requeueOnce": {
+      "nav.immediate": "d >= 3 s * v",
+      "nav.prepare": "d - I(v) >= v * (duration + 1 s)",
+      "nav.arrive_prepare": "d - arrivedMeters >= v * (duration + 1 s)",
+      "nav.start": "no maneuver prompt of the route has started"
+    },
+    "preemption": {
+      "CRITICAL_SAFETY": { "cuts": ["TRAFFIC_ALERT", "IMMEDIATE_NAVIGATION", "UPCOMING_NAVIGATION", "GENERAL_INFORMATION", "SOCIAL"], "exceptions": ["alert.pedestrian of the same episode"], "behindCritical": "queued first, not TTL-dropped while it waits, TTL from the end of the playing cue, starts with its own E1" },
+      "TRAFFIC_ALERT": { "cuts": ["UPCOMING_NAVIGATION", "GENERAL_INFORMATION", "SOCIAL"], "cutsImmediateIfRemainingMs": 1000 },
+      "IMMEDIATE_NAVIGATION": { "cuts": ["GENERAL_INFORMATION", "SOCIAL", "UPCOMING prompt or lane cue of the same event key"] },
+      "UPCOMING_NAVIGATION": { "cuts": [] },
+      "GENERAL_INFORMATION": { "cuts": [] },
+      "SOCIAL": { "cuts": [] },
+      "laneCue": { "cuts": [] },
+      "earconOnly": { "cutsSpeech": false, "trafficWhenBusy": "drop", "criticalCutsNonCriticalSpeechOfAnotherFamily": true }
+    },
+    "focus": { "critical": "AUDIOFOCUS_GAIN_TRANSIENT", "other": "AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK", "abandonAfterIdleMs": 500, "retryMs": 500, "playAnywayWhenRefused": ["CRITICAL_SAFETY", "TRAFFIC_ALERT"] },
+    "audibility": { "lowVolumeFraction": 0.4, "maxRouteLatencyMs": 250 },
+    "mutedMaxMs": 120000
+  },
+  "maneuverPhrases": {
+    "TURN_LEFT": { "maneuver": "turn left", "onto": true },
+    "TURN_RIGHT": { "maneuver": "turn right", "onto": true },
+    "KEEP_LEFT": { "maneuver": "keep left", "onto": true },
+    "KEEP_RIGHT": { "maneuver": "keep right", "onto": true },
+    "MERGE": { "maneuver": "merge", "onto": true },
+    "MERGE_LEFT": { "maneuver": "merge left", "onto": false },
+    "MERGE_RIGHT": { "maneuver": "merge right", "onto": false },
+    "EXIT": { "maneuver": "take exit {exitNumberWords}", "fallback": "take the exit", "onto": false },
+    "ENTER_HIGHWAY": { "maneuver": "take the ramp", "onto": true }
+  },
+  "slotRules": {
+    "onto": " onto {street}; omitted when street is missing or longer than 4 words after normalization; google provider: keep only the text after the last ' onto ', else omit",
+    "then": ", then {maneuver of next} (no onto) or ', then arrive at {destination}' when next.distanceMeters - target.distanceMeters <= max(12 s * v, 60 m)",
+    "destination": "text of packet.destination.label before the first comma, normalized; 'your destination' when missing, containing digits, or longer than 4 words",
+    "distance": "speakDistance(d - v * leadS), rendered when the cue is bound",
+    "exitNumberWords": "for an exit (EXIT, or KEEP_LEFT / KEEP_RIGHT with an exit number): the exit number trimmed must match ^(\\d{1,3})([A-Za-z])?$; 1-99 in words (ninety-four), 100-999 in groups (two fifty, one oh five, three hundred), an optional letter as a capital (twenty-three B); anything else uses the fallback take the exit. When a sentence with the number exceeds its word budget, the fallback is used"
+  },
+  "speakDistanceImperial": {
+    "note": "Round feet to the nearest 100 first (half up). If that is <= 1000 ft, speak feet; otherwise use the mile bands on the unrounded miles.",
+    "notSpokenBelowFeet": 95,
+    "feetStep": 100,
+    "feetMax": 1000,
+    "quarterMileBelowMiles": 0.625,
+    "quarterMilePhrases": { "0.25": "a quarter mile", "0.5": "half a mile" },
+    "halfMileUpToMiles": 2.0,
+    "halfMilePhrases": { "0.5": "half a mile", "1.0": "one mile", "1.5": "one and a half miles", "2.0": "two miles" },
+    "aboveTwoMiles": "nearest whole mile in words, e.g. three miles"
+  },
+  "speakDistanceMetric": {
+    "notSpokenBelowMeters": 10,
+    "bands": [
+      { "upToMeters": 90, "stepMeters": 10 },
+      { "upToMeters": 900, "stepMeters": 100 },
+      { "upToMeters": 3000, "stepMeters": 500 },
+      { "upToMeters": null, "stepMeters": 1000 }
+    ]
+  },
+  "fixedPhrases": [
+    "Vehicle too close.",
+    "Pedestrian very close.",
+    "Pedestrian ahead.",
+    "Red light ahead.",
+    "Stop sign ahead.",
+    "Vehicle close ahead.",
+    "Road alerts paused.",
+    "Road alerts back.",
+    "Navigation paused.",
+    "You are off route.",
+    "Back on route.",
+    "Starting route to your destination.",
+    "You have arrived at your destination.",
+    "Move to the left lane for the turn, check for cars.",
+    "Move to the right lane for the turn, check for cars.",
+    "Move to the left lane for the exit, check for cars.",
+    "Move to the right lane for the exit, check for cars.",
+    "Move to the left lane, check for cars.",
+    "Move to the right lane, check for cars.",
+    "Move left for the turn, check for cars.",
+    "Move right for the turn, check for cars.",
+    "Move left for the exit, check for cars.",
+    "Move right for the exit, check for cars.",
+    "Move left, check for cars.",
+    "Move right, check for cars.",
+    "Turn left.",
+    "Turn right.",
+    "Keep left.",
+    "Keep right.",
+    "Merge.",
+    "Merge left.",
+    "Merge right.",
+    "Take the exit.",
+    "Take the ramp.",
+    "Speed limit ten.",
+    "Speed limit fifteen.",
+    "Speed limit twenty.",
+    "Speed limit twenty-five.",
+    "Speed limit thirty.",
+    "Speed limit thirty-five.",
+    "Speed limit forty.",
+    "Speed limit forty-five.",
+    "Speed limit fifty.",
+    "Speed limit fifty-five.",
+    "Speed limit sixty.",
+    "Speed limit sixty-five.",
+    "Speed limit seventy.",
+    "Speed limit seventy-five.",
+    "Speed limit eighty.",
+    "Speed limit eighty-five."
+  ],
+  "roadAbbreviations": [
+    { "from": "St", "to": "Street", "position": "afterName" },
+    { "from": "St", "to": "Saint", "position": "beforeName" },
+    { "from": "Dr", "to": "Drive", "position": "any" },
+    { "from": "Ave", "to": "Avenue", "position": "any" },
+    { "from": "Blvd", "to": "Boulevard", "position": "any" },
+    { "from": "Rd", "to": "Road", "position": "any" },
+    { "from": "Ln", "to": "Lane", "position": "any" },
+    { "from": "Ct", "to": "Court", "position": "any" },
+    { "from": "Pl", "to": "Place", "position": "any" },
+    { "from": "Pkwy", "to": "Parkway", "position": "any" },
+    { "from": "Hwy", "to": "Highway", "position": "any" },
+    { "from": "Fwy", "to": "Freeway", "position": "any" },
+    { "from": "Expy", "to": "Expressway", "position": "any" },
+    { "from": "Cir", "to": "Circle", "position": "any" },
+    { "from": "Trl", "to": "Trail", "position": "any" },
+    { "from": "Ter", "to": "Terrace", "position": "any" },
+    { "from": "Sq", "to": "Square", "position": "any" },
+    { "from": "N", "to": "North", "position": "last" },
+    { "from": "S", "to": "South", "position": "last" },
+    { "from": "E", "to": "East", "position": "last" },
+    { "from": "W", "to": "West", "position": "last" },
+    { "from": "NE", "to": "Northeast", "position": "last" },
+    { "from": "NW", "to": "Northwest", "position": "last" },
+    { "from": "SE", "to": "Southeast", "position": "last" },
+    { "from": "SW", "to": "Southwest", "position": "last" }
+  ]
+}

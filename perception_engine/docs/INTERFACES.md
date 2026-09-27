@@ -1,6 +1,6 @@
 # Interfaces, end to end
 
-Every data format between the tablet camera and the Glass overlay in the AI Spatial Driving Copilot,
+Every data format between the tablet camera and the tablet's AR view in the AI Spatial Driving Copilot,
 plus the Python and Kotlin APIs around them. The normative spec is
 [`contracts/PROTOCOL_v2.md`](../contracts/PROTOCOL_v2.md) with one JSON Schema per message in
 [`contracts/schemas/`](../contracts/schemas/). Every example below is trimmed from a golden sample in
@@ -14,8 +14,8 @@ disagree, the spec wins; please fix this page.
 3. [Camera uplink (binary)](#3-camera-uplink-binary)
 4. [Client to server messages](#4-client-to-server-messages)
 5. [Server to client messages](#5-server-to-client-messages)
-6. [navigation.packet to RouteState](#6-navigationpacket-to-routestate)
-7. [Perception to VisionData](#7-perception-to-visiondata)
+6. [navigation.packet to RouteGuide](#6-navigationpacket-to-routeguide)
+7. [Perception to the AR scene](#7-perception-to-the-ar-scene)
 8. [Python in-process API](#8-python-in-process-api)
 9. [Kotlin API](#9-kotlin-api)
 10. [HTTP endpoints and files on disk](#10-http-endpoints-and-files-on-disk)
@@ -24,15 +24,15 @@ disagree, the spec wins; please fix this page.
 
 ```text
  tablet camera (YUV_420_888, sensor orientation)                              [CameraX buffer space]
-   -> LaptopVisionSource: downscale to <= 960 px wide, JPEG q80, SDC1 header with rotationDegrees
+   -> CameraUplink + YuvJpegEncoder: downscale to <= 960 px wide, JPEG q80, SDC1 header with rotationDegrees
    -> WebSocket binary frame
  laptop server: decode, rotate clockwise by rotationDegrees, scale to <= 1280 px wide  [server image space, px]
    -> perception.frame / perception.update (bbox [x1,y1,x2,y2] px, lanes, road, image {width,height})
  tablet PerceptionBridge: WorldModel (merge by track id, smoothing, staleness), DrivingContextEngine
-   -> VisionMapper: px / image size -> PreviewCoordinates (rotation 0, FILL_CENTER) -> clip to 0..1
-   -> VisionData boxes [x,y,w,h] 0..1 of the view                                       [overlay space]
-   -> AROverlay (GLASS / DEBUG)
- phase1 (laptop, Node child) -> navigation.packet.routeState -> BridgeRouteSource -> RouteState -> AROverlay
+   -> ArSceneBuilder: GroundProjector (frame camera block) + EgoLane + RouteArrows; FillCenter px -> view px
+   -> ArScene: chevrons, lead highlight, Debug layer, in view pixels                   [view space]
+   -> SpatialArEngine canvas (clean / Debug view)
+ phase1 (laptop, Node child) -> navigation.packet -> RouteGuide (+ NavigationMapper) -> RouteArrows, maneuver card, voice
 ```
 
 | Space | Where | Definition |
@@ -40,7 +40,7 @@ disagree, the spec wins; please fix this page.
 | CameraX buffer | `ImageProxy` on the tablet | Sensor orientation; `imageInfo.rotationDegrees` = rotate clockwise by this to make it upright |
 | Server image | every `bbox`, lane and road point in `perception.*` | Pixels of the upright analysed image, `(0,0)` top-left, size `image.width` x `image.height` |
 | Ground | `distanceMeters`, `lateralMeters`, `groundXZ` | Metres on flat ground from the camera; lateral + = right, forward + = ahead |
-| Overlay | `VisionData` | `[x, y, w, h]` fractions 0..1 of the view (top-left + size); the image covers the view (`FILL_CENTER` / `RESIZE_MODE_ZOOM`) and is cropped |
+| View | `ArScene` | View pixels of the AR canvas; the image covers the view (`FILL_CENTER` / `RESIZE_MODE_ZOOM`) and is cropped (`FillCenter`) |
 
 Time bases: `ptsSeconds` is media time (clip pts in video/sim; seconds since the first captured frame in live).
 `captureTimeNs` and `clientTimeNs` are the tablet's clock and come back unchanged. `serverTimeMs` is the laptop's
@@ -393,58 +393,58 @@ such as `"right"`, `"2"`, `"2-3"`; clients also accept a number), `turnDirection
 
 Trimmed from `navigation.packet.live.json` (made by `nav/make_contract_samples.js` with a fixed clock).
 
-## 6. navigation.packet to RouteState
+## 6. navigation.packet to RouteGuide
 
-The app's `RouteState(time, action, audio, ui)` (in `Models.kt`) comes from `BridgeRouteSource`
-(`app/.../glass/perception/RouteSource.kt`):
+The app's `RouteGuide` (`frontend/app/src/main/java/com/drivingassist/spatialcopilot/nav/RouteGuide.kt`) is read
+straight off the newest `navigation.packet` (the bridge's `navigation` flow). It only picks fields and formats them; it
+has no route logic:
 
-| RouteState | From |
+| RouteGuide | From |
 |---|---|
-| `action` | `routeState.action` as is. `AROverlay`'s arrow logic already reads LEFT / RIGHT / STRAIGHT from these names |
-| `audio` | `routeState.audio` |
-| `ui` | `routeState.ui` |
-| `time` | the packet's `ptsSeconds` in SIM, otherwise seconds since start |
+| `maneuver`, `action`, `turnDirection` | `routeState.action` / `turnDirection` (`NavigationMapper.maneuverFor`) |
+| `distanceMeters` | `routeState.distanceMeters`; `distanceAt(now)` moves it on with phase1's `progress.speedMps` (at most 2 s) between packets |
+| `spatialType`, `anchorAheadMeters` | `spatialInstructions[0].type`; its anchor's `routeDistanceMeters` minus `progress.distanceTraveledMeters` |
+| `roadName`, `exitNumber`, `destination` | `routeState.roadName` or `routeSemantics.roadName`, `routeSemantics.exitNumber`, `destination.label` |
+| `etaSeconds`, `remainingMeters`, `offRoute` | `routeState` (and `progress.offRoute`) |
+| `routeKey`, `eventKey` | `routeId` / `tripId` and `activeManeuver.eventId`: each voice prompt stage plays once per key |
 
-| Situation | RouteState |
+| Situation | App |
 |---|---|
-| no packet yet | `action = WAITING_FOR_ROUTE`, `ui = NONE` |
-| packet without a route | `action = NO_ROUTE` |
-| no packet for 10 s (`BridgeConfig.navigationStaleAfterMs`) | last action kept, `audio = "Route updates paused"`, `ui = WARNING` |
-| MOCK, or navigation off (`perception.nav=false`) | the 5 s mock loop in `MockDataViewModel` |
+| no packet yet, or no `routeState` | no route guide: no road arrows, no maneuver card |
+| no packet for 10 s (`BridgeConfig.navigationStaleAfterMs`) | `stale`: last route kept on screen and marked, banner `Navigation paused: no route update for 10 s. Last route shown.` |
+| laptop runs no navigation (`perception.hello.navigation`) | banner `Route unavailable ...` |
+| DEMO | the scripted placeholder "Exit 56" route of `DemoDrive` (only in DEMO) |
 
 The Driving Context also turns the packet into a `NavigationState` (`NavigationMapper`): maneuver, distance, label,
 required lanes (1-based from the left) or side, audio, `offRoute`. Lane guidance combines it with the perceived
 `currentLane` / `laneCount`; without a required lane the side is inferred from the turn direction within 300 m of the
 maneuver, and there is no guidance while `offRoute`.
 
-## 7. Perception to VisionData
+## 7. Perception to the AR scene
 
-`VisionMapper.map(world, viewWidth, viewHeight)` (`app/.../glass/perception/VisionMapper.kt`) turns a `WorldSnapshot`
-into the overlay's `VisionData`. In LIVE the snapshot is `bridge.predictedAt(now)` (boxes moved forward from capture
-time by track velocity, at most 300 ms); in SIM it is `bridge.resultForPts(playerPosition)`.
+`ArSceneBuilder.build(ArInput(world, context, route, routeDistanceMeters, debug), viewWidth, viewHeight, nowNs)`
+(`frontend/app/src/main/java/com/drivingassist/spatialcopilot/ar/ArScene.kt`, pure Kotlin, JVM-tested) turns a
+`WorldSnapshot`, the Driving Context and the `RouteGuide` into the `ArScene` that `SpatialArEngine` draws every display
+frame. In LIVE the snapshot is `bridge.predictedAt(now)` (boxes moved forward from capture time by track velocity, at
+most 300 ms); in SIM it is `bridge.resultForPts(playerPosition)`; in DEMO it is the scripted `DemoDrive` world.
 
-| VisionData | Source (server image space) | Rule |
+| ArScene | Source | Rule |
 |---|---|---|
-| `vehicles[]` `{id, box, distanceMeters}` | `world.objects` of class car, truck, bus, motorcycle, bicycle, pedestrian, rider | Visible in the newest frame and with a distance; nearest first; off-screen ones dropped; at most 8. `id` = track id; distance = WorldModel-smoothed |
-| `signs[]` (lights) | `world.objects` of class traffic light | `LIGHT_RED` / `LIGHT_YELLOW` / `LIGHT_GREEN` from the debounced state; `UNKNOWN` not drawn; `id` = track id |
-| `signs[]` (road signs) | `world.signs` seen within 0.5 s | `STOP`, `YIELD`, `SPEED_LIMIT_<n>`, `DO_NOT_ENTER`, `PEDESTRIAN_CROSSING`, other classes `WARNING`, `unknown` dropped; `id` = 100000 + sign id |
-| `lanes[]` `{id, points}` | `world.lanes` if the last run is <= 1 s old | Ego boundaries -> `left` / `right`, others `lane_<i>`; points near to far, clipped to the view |
-| `exitSigns[]` | none | always empty (no exit-sign detector yet) |
-| `time` | `ptsSeconds` | LIVE: seconds since the first uplinked frame; SIM: media time |
-| everything | `world.perceptionStale` | stale -> all lists empty (never draw old markers) |
+| `chevrons`, `ribbon`, `pin` (road arrows) | `RouteArrows.intent(route, laneGuidance, distance)`, laid out along the `EgoLane` | Only from phase1's route and the Driving Context's lane guidance. Projected on the road with `GroundProjector` (the frame's `camera` block: focal, principal point, horizon, camera height; the same maths as the server's `groundXZ`). The ego lane is fitted from perception and low-pass filtered (180 ms) between results; arrows fade in and out in 0.35 s. No exit-sign detector: exit numbers come from the route only |
+| `lead` | Driving Context `following` | Only in CLOSE / TOO CLOSE with a measured distance: the lead vehicle's box and its distance (`Vehicle ahead: 8.4 m`) |
+| `debug` | the whole world | Debug view only: every box with its label, lane polylines, the fitted ego lane, anchors, horizon |
+| arrows | `world.perceptionStale` | stale -> no new ego-lane fit and the arrows fade out (never laid on old geometry) |
 
 Box conversion for an image of `W x H` px shown in a view of `Vw x Vh` px:
 
 ```text
- normalised buffer box: (x1/W, y1/H, (x2-x1)/W, (y2-y1)/H)
- PreviewCoordinates.mapBox(box, rotationDegrees = 0, bufferWidth = W, bufferHeight = H, viewWidth = Vw, viewHeight = Vh)
+ FillCenter(W, H, Vw, Vh):
    FILL_CENTER: s = max(Vw/W, Vh/H); dx = (Vw - W*s)/2; dy = (Vh - H*s)/2
-   x_view = (x_px*s + dx) / Vw,  y_view = (y_px*s + dy) / Vh,  then clipped to 0..1
+   x_view = x_px*s + dx,  y_view = y_px*s + dy   (view pixels)
  Tab S9 (2560 x 1600) with a 1280 x 720 frame: s = 2.222, 142 px cropped each side, image columns 64..1216 visible
 ```
 
-`FrameGeometry.viewWidth/viewHeight` is written by `CameraPreview` (LIVE) or `SimVideoBackground` (SIM); a size of 0
-gives empty `VisionData`.
+The view size is the AR canvas's own size; a size of 0 (or a frame without `image` / `camera`) draws nothing.
 
 ## 8. Python in-process API
 
@@ -561,21 +561,20 @@ Message classes (`com.drivingassist.copilot.perception`): `HelloMessage`, `Perce
 `ClientPlayback`, `ClientPing`, `ClientTripState`; `UplinkHeader`; `PerceptionCodec` (lenient JSON,
 `ignoreUnknownKeys`).
 
-### App side (`com.drivingassist.glass.perception`)
+### App side (`frontend/`, package `com.drivingassist.spatialcopilot`)
 
 | Class | Role |
 |---|---|
-| `PerceptionConfig` | `source` (MOCK/LIVE/SIM), `serverUrl`, `simVideoId`, `mountHeightMeters`, `navEnabled`. Launch extras (that launch only) > values saved with `perception.persist` (validated; `savedKeys`, chip "(saved)") > BuildConfig. `isAllowedUrl` accepts `ws://` only for loopback, private LAN, link-local, 100.64/10, `localhost`, `*.local`; `wss://` anywhere |
-| `PerceptionFactory` | Builds the vision and route sources and the `ViewModelProvider.Factory`; MOCK builds exactly `MockDataViewModel()` |
-| `PerceptionRuntime` | Owns the one `PerceptionBridge` per session, the camera-clock conversion, focal length from Camera2, status text, host visibility (`onHostStarted` / `onHostStopped`), the GPS feeder (retried every 5 s). Interfaces `BridgeBacked`, `CameraResolutionHint` |
-| `LaptopVisionSource` | LIVE: `VisionSource` + `ImageAnalysis.Analyzer`; YUV_420_888 only -> JPEG q80 (<= 960 px wide) -> `offerCameraFrame`; publishes `VisionMapper.map(predictedAt(now))` at about 30 Hz while the activity is started |
-| `SimVisionSource`, `SimVideoBackground` | SIM: ExoPlayer on `<app external files>/sim/<videoId>.(mov\|mp4\|mkv)`, `reportPlayback` every 100 ms and on play/pause/seek, `resultForPts` at about 30 Hz |
-| `BridgeRouteSource` | `navigation.packet.routeState` -> `RouteState` (section 6) |
-| `LocationFeeder` | LIVE with navigation on: `LocationManager` -> `client.trip_state` about 1 Hz (GPS, then network, fused; never passive) |
-| `BridgeStatusChip`, `PerceptionHostEffects`, `LocationPermissionRequest` | Status chip bottom-left (LIVE / SIM only); screen kept on + lifecycle to the runtime; location permission only in LIVE with navigation |
-| `VisionMapper` | Section 7 |
-
-To reach the bridge from Compose: `(viewModel.visionSource as? BridgeBacked)?.runtime?.bridge`.
+| `session.AppSettings` | Mode (`LIVE` / `SIM` / `DEMO`), `serverUrl`, `simVideoId`, `debug`, `mountHeightMeters` (1.25), `voice`, `gateCriticalBySpeed`, `cameraOnMonitor`. Saved in SharedPreferences; the launch extras `perception.source` / `perception.url` / `perception.video` / `perception.debug` override them and are saved. Any `ws://` or `wss://` URL |
+| `session.CopilotSession` | One run with fixed settings: owns the one `PerceptionBridge` (`bridge`, null in DEMO), the camera uplink (LIVE), the sim player (SIM), the GPS feeder (LIVE) or the scripted `DemoDrive` (DEMO); `displayWorld()` per display frame |
+| `camera.DrivingCamera`, `camera.YuvJpegEncoder`, `session.CameraUplink` | LIVE: CameraX preview (FILL_CENTER, 16:9 about 1280x720) plus a 16:9 about 960x540 analysis stream; YUV_420_888 only -> JPEG q80 (<= 960 px wide) -> `offerCameraFrame`; no encode without a credit; a new upright size re-sends the hello |
+| `session.SimPlayback`, `ui.SimVideoBackground` | SIM: Media3 ExoPlayer on `<app external files>/sim/<videoId>.(mov\|mp4\|mkv)` (`RESIZE_MODE_ZOOM`), `client.playback` about 10 Hz and on play / pause / seek / loop |
+| `session.LocationFeeder` | LIVE: `LocationManager` (fused, then GPS, then network; never passive) -> `client.trip_state` about 1 Hz |
+| `session.StatusModel` | Status chip lines, at most one degraded-state banner, the Debug view's link / latency / nav / GPS / voice lines |
+| `nav.RouteGuide`, `nav.DemoDrive` | Section 6; DEMO's scripted scene and placeholder route |
+| `ar.ArSceneBuilder`, `ar.RouteArrows`, `ar.EgoLane`, `ar.GroundProjector`, `ar.FillCenter`, `ui.SpatialArEngine` | Section 7 |
+| `voice.CueCatalog`, `CuePolicy`, `VoiceArbiter`, `VoiceCoordinator`, `ProxyTts`, `NativeTts`, `Earcons` | Driving Context + route -> deterministic cue rules (`perception_engine/docs/audio/`, catalog `audio_cues.v1.json` copied into the APK) -> one-at-a-time arbiter -> `AudioTrack`. ElevenLabs through the laptop's `POST /tts`, else Android TextToSpeech, else earcons. Visual alerts never depend on audio |
+| `ui.CopilotScreen` | Compose UI: background per mode, AR canvas, status chip (tap: settings dialog, hold: Debug view), maneuver card, banner, alert pill; screen kept on |
 
 ## 10. HTTP endpoints and files on disk
 
@@ -583,10 +582,11 @@ To reach the bridge from Compose: `(viewModel.visionSource as? BridgeBacked)?.ru
 |---|---|
 | `GET /health` | `status` (`ok` / `degraded`), `mode`, `modeArg`, `acceptedModes`, `sessionId`, `source`, `controller`, `clients[]`, `stats` (a `perception.stats` body), `laneWarmupMs`, `navigation`, `navigationLastCallMs`, `videoFinished`, `sim` (`videoId`, `lookaheadSeconds`, `submitted`, `seeks`), last `errors` |
 | `GET /config` | The merged engine config, engine description, mode, clip list, config path |
+| `POST /tts`, `GET /tts/health` | ElevenLabs text-to-speech proxy for the app's voice (key only in the gitignored `perception_engine/.env`; loopback clients only unless `--tts-allow-lan`; `--no-tts` answers 503 `notConfigured`). Contract: `docs/audio/AUDIO_CUE_RULES.md` sections 10.4 and 10.5 |
 
 | File | Format |
 |---|---|
 | phase1 session folder (`nav/demo_sessions/<clip>/`) | `session_manifest.json` (`sessionId`, `capturedAtMs`, `videoFile`, `videoId`, `routeFile`, `tripStateFile`, `source`, optional `videoStartTimestampMs`), `route.json` (phase1 `RouteSnapshot`: `routeId`, `provider`, `origin`, `destination`, `polyline`, `geometry`, `steps`, totals), `trip_state.jsonl` (one `client.trip_state` body per line, without `type`). No video inside |
 | Frames folder for `bridge-cli live` (`scripts/extract_frames.py`) | `frame_000000.jpg` ... (960x540 q80 by default) plus `meta.json` (`clip`, `sourceFps`, `sourceSize`, `fps`, `width`, `height`, `jpegQuality`, `start`, `count`, `avgKB`) |
-| SIM clip on the tablet | `/sdcard/Android/data/com.drivingassist.glass/files/sim/<videoId>.mov` (or `.mp4`, `.mkv`); same file stem as on the laptop |
+| SIM clip on the tablet | `/sdcard/Android/data/com.drivingassist.spatialcopilot/files/sim/<videoId>.mov` (or `.mp4`, `.mkv`); same file stem as on the laptop |
 | Sim clips on the laptop | `perception_engine/data/bdd100k/videos/**` and `data/sim_videos/**`, plus `--video-dir DIR` |

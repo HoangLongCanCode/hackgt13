@@ -1,7 +1,7 @@
 # Demo-day runbook
 
 How to run the AI Spatial Driving Copilot demo: laptop perception server plus
-phase1 navigation, Samsung Galaxy Tab S9 running the Glass Mode app. All paths are relative to the repo root. Commands
+phase1 navigation, Samsung Galaxy Tab S9 running the tablet app (`frontend/`). All paths are relative to the repo root. Commands
 are PowerShell; in Git Bash use forward slashes and `./gradlew.bat`.
 
 ## Contents
@@ -40,7 +40,6 @@ Fresh clone (details and troubleshooting: [`perception_engine/SETUP.md`](../SETU
 ```powershell
 git clone https://github.com/HoangLongCanCode/hackgt13.git
 cd hackgt13
-git checkout long                                                 # until it is merged into main; main has the navigation engine in spatial/
 cd perception_engine
 powershell -ExecutionPolicy Bypass -File scripts\setup_env.ps1 -WithData
 .venv\Scripts\python.exe scripts\verify_env.py                     # 8 checks, exit code 0
@@ -97,6 +96,11 @@ The banner looks like this:
 Health at any time: open `http://127.0.0.1:8765/health` in a browser (mode, session, controller, clients, stats,
 navigation state, recent errors).
 
+Voice: the same port proxies ElevenLabs for the app (`POST /tts`, `GET /tts/health`). Put `ELEVENLABS_API_KEY` and
+`ELEVENLABS_VOICE_ID` in the gitignored `perception_engine/.env`; without them (or with `--no-tts`) the app speaks with
+Android TextToSpeech, else earcons. The proxy answers loopback only (USB with `adb reverse`) unless `--tts-allow-lan`.
+Visual alerts never depend on audio.
+
 Tuning knobs (restart the server to change them):
 
 | Flag | Default | When to change |
@@ -125,16 +129,17 @@ The app's default URL, `ws://127.0.0.1:8765/perception`, then works as is.
 3. Start the server; note the `LAN (Wi-Fi)` URL it prints.
 4. Launch the app with that URL: `--es perception.url ws://<laptop-LAN-IP>:8765/perception` (section 5).
 
-The app accepts `ws://` only for loopback, private LAN (10/8, 172.16/12, 192.168/16), link-local, 100.64/10,
-`localhost` and `*.local` hosts; anything else shows `URL rejected` on the status chip.
+The app accepts any `ws://` or `wss://` URL (settings dialog or `perception.url`); anything else is refused (`Use a ws://
+or wss:// URL` in the dialog, ignored as a launch extra). Campus Wi-Fi and some hotspots block device-to-device
+traffic, or Windows Firewall classes them Public: prefer USB.
 
 ## 4. Build and install the app
 
-From `driving_assist/` with `JAVA_HOME` pointing at a JDK 17+ and the Android SDK configured (`ANDROID_HOME`, or
+From `frontend/` with `JAVA_HOME` pointing at a JDK 17+ and the Android SDK configured (`ANDROID_HOME`, or
 `local.properties` with `sdk.dir=<SDK path, forward slashes>`; packages `platforms;android-35`, `build-tools;34.0.0`):
 
 ```powershell
-.\gradlew.bat :app:assembleDebug
+.\gradlew.bat :app:assembleDebug :app:testDebugUnitTest :perception-bridge:test :bridge-cli:installDist   # 18 + 117 tests
 adb install -r app\build\outputs\apk\debug\app-debug.apk
 ```
 
@@ -146,8 +151,8 @@ The tablet and the laptop need the **same** clip (same file stem). The app reads
 needs no storage permission. From the repo root:
 
 ```powershell
-adb shell mkdir -p /sdcard/Android/data/com.drivingassist.glass/files/sim
-adb push perception_engine\data\bdd100k\videos\val\b1ff4656-0435391e.mov /sdcard/Android/data/com.drivingassist.glass/files/sim/
+adb shell mkdir -p /sdcard/Android/data/com.drivingassist.spatialcopilot/files/sim
+adb push perception_engine\data\bdd100k\videos\val\b1ff4656-0435391e.mov /sdcard/Android/data/com.drivingassist.spatialcopilot/files/sim/
 ```
 
 `.mov`, `.mp4` and `.mkv` work. The app must have been installed (and launched once) so the folder belongs to it. The
@@ -156,29 +161,35 @@ server's hello lists the clips the laptop has (`sim.videos`); an unknown id gets
 ## 5. Launch a mode
 
 ```powershell
-adb shell am start -S -n com.drivingassist.glass/.MainActivity --es perception.source sim --es perception.video b1ff4656-0435391e
-adb shell am start -S -n com.drivingassist.glass/.MainActivity --es perception.source live
-adb shell am start -S -n com.drivingassist.glass/.MainActivity --es perception.source live --es perception.url ws://<laptop-LAN-IP>:8765/perception
-adb shell am start -S -n com.drivingassist.glass/.MainActivity --es perception.source live --es perception.mount 1.3    # camera height (m)
-adb shell am start -S -n com.drivingassist.glass/.MainActivity --es perception.source mock                      # no laptop needed
-adb shell am start -S -n com.drivingassist.glass/.MainActivity --es perception.source live --ez perception.persist true # keep for plain launches
-adb shell am start -S -n com.drivingassist.glass/.MainActivity --ez perception.reset true                       # forget kept values
+adb shell am start -S -n com.drivingassist.spatialcopilot/.MainActivity --es perception.source sim --es perception.video b1ff4656-0435391e
+adb shell am start -S -n com.drivingassist.spatialcopilot/.MainActivity --es perception.source live
+adb shell am start -S -n com.drivingassist.spatialcopilot/.MainActivity --es perception.source live --es perception.url ws://<laptop-LAN-IP>:8765/perception
+adb shell am start -S -n com.drivingassist.spatialcopilot/.MainActivity --es perception.source demo                      # no laptop needed
+adb shell am start -S -n com.drivingassist.spatialcopilot/.MainActivity --es perception.source sim --ez perception.debug true   # Debug view
 ```
 
-Extras apply to that launch only (a plain launch is the build default, MOCK) unless `--ez perception.persist true` keeps them;
-the chip then shows `(saved)`. `perception.nav false` turns navigation off (the 5 s mock route loop runs instead). The top-right
-button switches GLASS and DEBUG; use DEBUG to check that boxes sit on the objects (in SIM this also checks that the
-clip's rotation metadata was applied). The app keeps the screen on in LIVE and SIM.
+Extras override the saved settings and are saved with them, so a plain launch reopens the last mode (first install:
+LIVE on `ws://127.0.0.1:8765/perception`). Tap the status chip for the settings dialog (mode LIVE / SIM / DEMO, URL,
+SIM clip id, Debug view, voice, camera films a monitor). DEMO needs no laptop: a scripted scene and a placeholder
+"Exit 56" route, only in DEMO. Long-press the chip to switch the Debug view (every box, lane polylines, fitted ego
+lane, anchors, horizon, fps / latency / link / nav / GPS / voice lines); use it to check that boxes sit on the objects
+(in SIM this also checks that the clip's rotation metadata was applied). The app keeps the screen on.
 
 ## 6. What to expect
 
-**Status chip** (bottom-left): source, then `DISCONNECTED` / `WAITING FOR SERVER`, or the result fps plus
-capture-to-result ms (LIVE) or `lead` ms (SIM: how early results arrive). `STALE` when results are too old;
-`NAV ok` / `NAV --` / `NAV STALE` / `NAV off on laptop`. The second line shows the current problem or the top alert,
-for example `CLOSE 6 m`, `RED LIGHT 40 m`, `MOVE RIGHT 2`. Mint = OK, amber = warning, red = disconnected.
+**Status chip** (top-left): mode, then `LAPTOP NOT CONNECTED` / `WAITING FOR LAPTOP` / `TAKEN OVER`, or the result
+fps plus capture-to-result ms (LIVE) or `lead` ms (SIM: how early results arrive). The second line shows the current
+problem (missing clip, camera, server error). Degraded states get one banner at the top, for example `Road alerts
+paused: perception results are late. Navigation only.`, `Route unavailable ...`, `GPS lost 7 s ago. Last route held.`
+Alerts sit at the bottom, for example `Vehicle ahead: 8.4 m` (CLOSE), `TOO CLOSE · Vehicle ahead: 5.1 m`,
+`Red light: 40 m`. Mint = OK, amber = warning, red = disconnected.
+
+**Clean view:** road arrows from the phase1 route, projected on the road with the frame's camera block and the ego
+lane; the lead vehicle highlighted only in CLOSE / TOO CLOSE with its measured distance; a maneuver card (top-right);
+the degraded-state banners. The Debug view adds everything else (section 5).
 
 **Start-up.** The first 1-3 s of every session are slow: in SIM the first results are late and the look-ahead then
-overshoots; in LIVE the first frames take 0.6-1.1 s. The chip says `STALE` and only navigation shows meanwhile. From
+overshoots; in LIVE the first frames take 0.6-1.1 s. The `Road alerts paused` banner shows and only navigation is shown meanwhile. From
 about 5 s on it is steady.
 
 **Measured on the dev laptop** (RTX 5060 Laptop, city clip, localhost = USB-equivalent). Set A: AC power, other jobs
@@ -204,8 +215,9 @@ missed it by 5-15 ms (both lanes share one Python process); on AC power with an 
 **Known behaviours during the demo:**
 - `ARRIVE` ("You have arrived at your destination.") comes after the last turn, even with 150-590 m left: that is
   phase1's current behaviour; the distance on screen is still right.
-- Stopped behind a car at 8-9 m the following state can stay `TOO CLOSE` (thresholds are not speed-aware yet).
-- `exitSigns` stays empty: there is no exit-sign detector.
+- Stopped behind a car at 8-9 m the following state can stay `TOO CLOSE` (thresholds are not speed-aware unless the
+  settings toggle `Hold TOO CLOSE at CLOSE while stopped` is on; it is off by default).
+- There is no exit-sign detector: exit numbers come from the phase1 route only.
 - Boxes at the far left/right edge can be cut off: the 16:9 image is cropped about 5 % per side on the 16:10 screen.
 
 ## 7. Rehearse without the tablet
@@ -219,14 +231,14 @@ From `perception_engine/`, with a server running:
 .venv\Scripts\python.exe -m perception.realtime.ws_probe live --url ws://127.0.0.1:8766/perception --seconds 30
 ```
 
-The same `PerceptionBridge` the app uses, with Driving Context and route output (from `driving_assist/`; the module
+The same `PerceptionBridge` the app uses, with Driving Context and route output (from `frontend/`; the module
 lives in `perception_engine/android/bridge-cli` and installs into its `build/install/`):
 
 ```powershell
 .\gradlew.bat :bridge-cli:installDist
 ..\perception_engine\android\bridge-cli\build\install\bridge-cli\bin\bridge-cli.bat sim --video-id b1ff4656-0435391e --seconds 30
-..\perception_engine\.venv\Scripts\python.exe ..\perception_engine\scripts\extract_frames.py b1ff4656-0435391e --fps 15 --seconds 20 --out ..\perception_engine\outputs\e2e\frames
-..\perception_engine\android\bridge-cli\build\install\bridge-cli\bin\bridge-cli.bat live --frames ..\perception_engine\outputs\e2e\frames --fps 15 --loop --trip-states ..\perception_engine\nav\demo_sessions\b1ff4656-0435391e\trip_state.jsonl --seconds 25
+..\perception_engine\.venv\Scripts\python.exe ..\perception_engine\scripts\extract_frames.py b1ff4656-0435391e --fps 15 --seconds 20   # -> perception_engine\outputs\e2e\frames_b1ff4656-0435391e
+..\perception_engine\android\bridge-cli\build\install\bridge-cli\bin\bridge-cli.bat live --frames ..\perception_engine\outputs\e2e\frames_b1ff4656-0435391e --fps 15 --loop --trip-states ..\perception_engine\nav\demo_sessions\b1ff4656-0435391e\trip_state.jsonl --seconds 25
 ```
 
 Netem profiles: `usb`, `wifi-good`, `wifi-busy` (6 +- 5 ms, 80 ms spikes every 4 s), `hotspot` (12 +- 8 ms, 150 ms
@@ -236,15 +248,15 @@ spikes every 3 s, 40 Mbit/s).
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Chip `DISCONNECTED` over USB | `adb reverse` missing (lost on replug or adb restart) | `adb reverse tcp:8765 tcp:8765`; check `adb reverse --list` |
-| Chip `WAITING FOR SERVER` for more than 60 s | Server still loading, or crashed | Watch the server console; open `/health` |
-| Chip `URL rejected` | `perception.url` is not a private/loopback `ws://` host | Use the LAN URL the server prints, or `wss://` |
-| Chip `TAKEN OVER` | Another client (second tablet, `bridge-cli`, `ws_probe`) sent a newer `client.hello` and now controls the laptop | Stop that client: the app takes the session back by itself when the server goes idle. Or relaunch the app (its hello wins) |
-| A plain launch opens LIVE / SIM, chip shows `(saved)` | Values were kept with `--ez perception.persist true` (or came back with Auto Backup) | `adb shell am start -S -n com.drivingassist.glass/.MainActivity --ez perception.reset true` |
-| SIM boxes do not sit on the cars, or the clip plays portrait | The clip's rotation metadata (720x1280 frames + -90 degree matrix) was not applied on the device, or a transcode lost it | Check once in DEBUG; if wrong, push a pre-rotated 1280x720 `.mp4` with the same stem to both devices |
-| Chip `LIVE uplink: camera format ... is not YUV_420_888` | `CameraPreview` was switched to RGBA output | LIVE needs `OUTPUT_IMAGE_FORMAT_YUV_420_888` (the default) |
-| Chip `no location provider: turn Location on ...` | Location switched off on the tablet | Turn it on; the app retries every 5 s |
-| logcat `CLEARTEXT communication ... not permitted` | APK built without this branch's `network_security_config` (an older build, or another branch) | Rebuild and reinstall from this branch |
+| Chip `LAPTOP NOT CONNECTED` over USB | `adb reverse` missing (lost on replug or adb restart) | `adb reverse tcp:8765 tcp:8765`; check `adb reverse --list` |
+| Chip `WAITING FOR LAPTOP` for more than 60 s | Server still loading, or crashed | Watch the server console; open `/health` |
+| Settings dialog says `Use a ws:// or wss:// URL` | The URL does not start with `ws://` or `wss://` | Use the LAN URL the server prints, or `ws://127.0.0.1:8765/perception` over USB |
+| Chip `TAKEN OVER` | Another client (second tablet, `bridge-cli`, `ws_probe`) sent a newer `client.hello` and now controls the laptop | Stop that client: the app takes the session back by itself when the server goes idle. Or tap the chip to take it back, or relaunch the app (its hello wins) |
+| A plain launch opens the wrong mode, URL or clip | Settings and launch extras are saved (and can come back with Auto Backup) | Tap the chip and change them, or launch with `--es perception.source ...` (section 5) |
+| SIM boxes do not sit on the cars, or the clip plays portrait | The clip's rotation metadata (720x1280 frames + -90 degree matrix) was not applied on the device, or a transcode lost it | Check once in the Debug view; if wrong, push a pre-rotated 1280x720 `.mp4` with the same stem to both devices |
+| Chip `Camera: camera format ... is not YUV_420_888` | The analysis stream in `DrivingCamera` was switched to RGBA output | LIVE needs `OUTPUT_IMAGE_FORMAT_YUV_420_888` (the default) |
+| Banner `No location: turn Location on for live navigation.` | Location switched off on the tablet, or permission denied | Turn it on (and grant the permission); the app retries when it comes back to the foreground |
+| logcat `CLEARTEXT communication ... not permitted` | APK built without the `network_security_config` of `frontend/` (an older build) | Rebuild and reinstall from `frontend/` |
 | WebSocket upgrade rejected with HTTP 403 | Another (old v1) server is on the port, or a FastAPI regression (`WebSocket` must be imported at module level in `server.py`) | `netstat -ano \| findstr :8765`; stop that process if it is yours, or run on `--port 8766` and pass the URL |
 | Server fails to bind the port | Port in use | Same as above |
 | `unknownVideo` / chip names a missing clip | Clip missing on the laptop or the tablet | Laptop: `scripts\fetch_bdd_samples.py`, or put it in `data/sim_videos/` or `--video-dir`. Tablet: [push it](#sim-put-the-clip-on-the-tablet) |
@@ -253,7 +265,7 @@ spikes every 3 s, 40 Mbit/s).
 | `NavRelayError: phase1 route engine not found` | The checkout has no `spatial/` (branch without `main`) | Bring `main` into the checkout, or point `PHASE1_DIR` / `--phase1-dir` at a `spatial/` folder or a legacy `src/phase1` checkout |
 | hello `navigation.available: false`, error mentions node | Node missing or too old | Install Node 18+; perception keeps working without it |
 | `--nav-provider google` fails at start | No `GOOGLE_MAPS_API_KEY` | Put it in `spatial/.env` (gitignored; never commit it) or the environment, or use `mock` |
-| LIVE route stays `WAITING_FOR_ROUTE` | No location fixes: the **Tab S9 Wi-Fi model has no GPS receiver**, permission denied, or indoors | The app falls back to network location (tens of metres; logcat tag `LocationFeeder`). Use a 5G Tab S9, or demo navigation in SIM |
+| LIVE shows no route, banner `Waiting for GPS` or `GPS accuracy ±... m` | No location fixes: the **Tab S9 Wi-Fi model has no GPS receiver**, permission denied, or indoors | The app uses fused, else GPS, else network location (network: tens of metres; logcat tag `LocationFeeder`). Use a 5G Tab S9, or demo navigation in SIM |
 | `perception.error modeNotAvailable` for trip states | Server not running live navigation | Start with `--mode live --nav-route ...` |
 | `perception.error notUplinkClient` for trip states | The sender does not control the session (live navigation follows the controller only) | Send `client.hello` (mode live) first, or `navigation.mode: "live"` in the hello |
 | hello `navigation.available: false` with "relay failing" in `error`, one `perception.error internal` | phase1 returned no packet 3 times in a row (bad route, Google error) | Server console (logger `perception.realtime.nav_relay`); it recovers by itself on the next good packet |
@@ -263,7 +275,7 @@ spikes every 3 s, 40 Mbit/s).
 | `ModuleNotFoundError: perception` | Wrong working folder | Run from `perception_engine/` |
 | Live latency well above the table | Battery power, other GPU jobs, Wi-Fi | AC power, close GPU apps, use USB, `--max-in-flight 1`, `--set slow.max_hz=5` |
 | fps drops after some minutes | Thermal throttling (laptop GPU or tablet) | AC power and airflow for the laptop; keep the tablet out of the sun, lower brightness if hot |
-| Boxes rotated or shifted in DEBUG | Preview and analysis with different fields of view, or a rotation mapping issue | LIVE requests 16:9 about 1280x720 for both; report to the app owner (`PERCEPTION_INTEGRATION.md` section 5) |
+| Boxes rotated or shifted in the Debug view | Preview and analysis with different fields of view, or a rotation mapping issue | LIVE requests 16:9 for both (preview about 1280x720, analysis about 960x540); report to the app owner (`frontend/app/src/main/java/com/drivingassist/spatialcopilot/camera/DrivingCamera.kt`) |
 | Tablet cannot reach the laptop on the hotspot | Different networks, firewall, or client isolation | Same SSID on both, laptop profile Private, allow `python.exe`; otherwise use USB |
 | `adb` shows `unauthorized` | USB debugging not accepted | Accept the prompt on the tablet, or revoke and re-plug |
 

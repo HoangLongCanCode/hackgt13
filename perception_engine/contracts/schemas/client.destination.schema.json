@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hackgt13.local/contracts/schemas/client.destination.schema.json",
+  "title": "client.destination (protocol v2)",
+  "description": "Client -> server live-navigation target (PROTOCOL_v2.md, Navigation). Either a free-text query that the server's phase1 provider geocodes, or a place picked from navigation.places: then `location` (and `placeId`) are used as they are and `query` is the label shown and echoed in perception.hello navigation.destination. The route is built from the next client.trip_state position. Same sender rule as client.trip_state.",
+  "type": "object",
+  "required": [
+    "type",
+    "query"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "type": {
+      "const": "client.destination"
+    },
+    "query": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "description": "Free-text place or address, or the picked place's label, e.g. \"Piedmont Park, Atlanta\"."
+    },
+    "placeId": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 256,
+      "description": "Provider place id of a picked place (optional)."
+    },
+    "location": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "lat",
+            "lng"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "lat": {
+              "type": "number",
+              "minimum": -90,
+              "maximum": 90
+            },
+            "lng": {
+              "type": "number",
+              "minimum": -180,
+              "maximum": 180
+            }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Exact destination of a picked place; when present the server does not geocode `query`."
+    }
+  }
+}

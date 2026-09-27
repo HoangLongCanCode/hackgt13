@@ -4,10 +4,13 @@ import com.drivingassist.copilot.context.LaneAction
 import com.drivingassist.copilot.context.LaneSide
 import com.drivingassist.copilot.context.Maneuver
 import com.drivingassist.copilot.context.NavigationState
+import com.drivingassist.copilot.context.SyntheticRoad
 import com.drivingassist.copilot.perception.Camera
 import com.drivingassist.copilot.perception.ClientCamera
+import com.drivingassist.copilot.perception.ClientDestination
 import com.drivingassist.copilot.perception.ClientHello
 import com.drivingassist.copilot.perception.ClientPing
+import com.drivingassist.copilot.perception.ClientPlaceSearch
 import com.drivingassist.copilot.perception.ClientPlayback
 import com.drivingassist.copilot.perception.ClientTripState
 import com.drivingassist.copilot.perception.DeviceInfo
@@ -20,12 +23,14 @@ import com.drivingassist.copilot.perception.Lanes
 import com.drivingassist.copilot.perception.NavRouteState
 import com.drivingassist.copilot.perception.NavigationHint
 import com.drivingassist.copilot.perception.NavigationPacketMessage
+import com.drivingassist.copilot.perception.NavigationPlacesMessage
 import com.drivingassist.copilot.perception.ObjectClass
 import com.drivingassist.copilot.perception.PerceivedObject
 import com.drivingassist.copilot.perception.PerceptionCodec
 import com.drivingassist.copilot.perception.PerceptionFrame
 import com.drivingassist.copilot.perception.PerceptionMode
 import com.drivingassist.copilot.perception.PerceptionUpdate
+import com.drivingassist.copilot.perception.PlaceResult
 import com.drivingassist.copilot.perception.PongMessage
 import com.drivingassist.copilot.perception.SimInfo
 import com.drivingassist.copilot.perception.SkipMessage
@@ -142,13 +147,17 @@ class PerceptionBridgeTest {
 
     private val car = PerceivedObject(id = 7, cls = ObjectClass.CAR, bbox = listOf(430.0, 250.0, 540.0, 330.0), confidence = 0.9, ageFrames = 5, inEgoPath = true)
 
-    private fun frameJson(seq: Long, pts: Double, echo: Echo?, session: String) = PerceptionCodec.encode(
+    private fun frameJson(seq: Long, pts: Double, echo: Echo?, session: String, lanes: Lanes? = null) = PerceptionCodec.encode(
         PerceptionFrame(
             schemaVersion = 2, seq = seq, sessionId = session, source = Source(SourceKind.CAMERA, "tab-s9-01"), frameIndex = seq,
             ptsSeconds = pts, serverTimeMs = System.currentTimeMillis(), processingMs = 20.0, image = ImageSize(960, 540),
-            camera = Camera(745.2, listOf(480.0, 270.0)), objects = listOf(car), wave = 1, echo = echo,
+            camera = Camera(745.2, listOf(480.0, 270.0)), objects = listOf(car), lanes = lanes, wave = 1, echo = echo,
         ),
     )
+
+    /** The lines of three lanes 3.5 m wide seen from the middle of the left one, by the camera of [frameJson]. */
+    private val lane1of3 = SyntheticRoad(focalPx = 745.2, cx = 480.0, cy = 270.0, width = 960, height = 540)
+        .lanes(-1.75, 1.75, 5.25, 8.75).copy(currentLane = 1, laneCount = 3)
 
     private fun navJson(action: String, distance: Double, requiredLane: String? = null, pts: Double? = null) = PerceptionCodec.encode(
         NavigationPacketMessage(
@@ -299,7 +308,11 @@ class PerceptionBridgeTest {
         assertEquals(0L, w.wave2!!.seq)
         assertNotNull(w.timing!!.captureToResultMs)
         assertFalse(w.perceptionStale)
-        assertEquals(LaneAction.CHANGE_LANE_RIGHT, b.context.await { it.laneGuidance?.action == LaneAction.CHANGE_LANE_RIGHT }.laneGuidance!!.action)
+        // One lanes run without lines: no layout, so the lane is unknown (the server's lane 2 of 3 is not used).
+        val live = b.context.await { !it.perceptionStale && it.laneGuidance != null }.laneGuidance!!
+        assertEquals(LaneAction.UNKNOWN, live.action)
+        assertNull(live.currentLane)
+        assertTrue(live.text.startsWith("USE LANE 3"), live.text)
         val k = b.link.await { it.rttMs != null && it.captureToResultMsP50 != null }
         assertTrue(k.rttMs!! >= 0.0)
 
@@ -320,8 +333,11 @@ class PerceptionBridgeTest {
         b.link.await { it.serverReady }
         val ws = serverWs.await()
 
-        // Perception says lane 1 of 3; the route says: exit in 400 m from the rightmost lane.
-        ws.send(frameJson(0, 0.0, null, "live-nav").replace("\"objects\"", "\"lanes\":{\"currentLane\":1,\"laneCount\":3,\"laneBoundaries\":[],\"confidence\":0.8},\"objects\""))
+        // A replayed packet of a sim session (it carries media time) is not this live trip's route.
+        ws.send(navJson("TURN_RIGHT", 28.0, pts = 12.3))
+        // Perception sees lane 1 of 3 (three lanes runs: the layout of the lines is stable from the third); the route
+        // says: exit in 400 m from the rightmost lane.
+        for (seq in 0L..2L) ws.send(frameJson(seq, seq / 10.0, null, "live-nav", lanes = lane1of3))
         ws.send(navJson("EXIT_HIGHWAY", 400.0, requiredLane = "right"))
         val nav = b.navigation.await { it != null }!!
         assertEquals("EXIT_HIGHWAY", nav.routeState!!.action)
@@ -363,6 +379,48 @@ class PerceptionBridgeTest {
     }
 
     @Test
+    fun `place search keeps only the newest answer and a picked place is sent with its location`() = runBlocking {
+        val serverWs = CompletableDeferred<WebSocket>()
+        enqueue(onOpen = { ws -> ws.send(helloJson("live-search", PerceptionMode.LIVE)); serverWs.complete(ws) })
+        val b = bridge()
+        assertNull(b.searchPlaces("coffee"), "not connected: nothing sent")
+        b.connect(liveHello.copy(navigation = NavigationHint.LIVE))
+        b.link.await { it.serverReady }
+        val ws = serverWs.await()
+        assertNull(b.searchPlaces("   "), "blank query")
+
+        val near = GeoPoint(33.7756, -84.3963)
+        val first = assertNotNull(b.searchPlaces("coffee", near))
+        val second = assertNotNull(b.searchPlaces(" tea "))
+        assertTrue(first != second)
+        assertEquals(ClientPlaceSearch(first, "coffee", near), PerceptionCodec.decodeClient(texts.pollType("client.place_search")!!))
+        assertEquals(ClientPlaceSearch(second, "tea", null), PerceptionCodec.decodeClient(texts.pollType("client.place_search")!!))
+        assertNull(b.places.value, "cleared while the newest search is pending")
+
+        fun answer(id: String, label: String) = PerceptionCodec.encode(
+            NavigationPlacesMessage(serverTimeMs = System.currentTimeMillis(), requestId = id, query = label, provider = "mock",
+                places = listOf(PlaceResult("mock-$label", label, "1 Test St", GeoPoint(33.78, -84.39), 900.0))),
+        )
+        // The answer to the older search comes late (after or before the newest): never shown.
+        ws.send(answer(first, "Old Coffee"))
+        ws.send(answer(second, "Tea House"))
+        assertEquals("Tea House", b.places.await { it != null }!!.places.single().label)
+        ws.send(answer(first, "Old Coffee"))
+        ws.send(navJson("GO_STRAIGHT", 10.0)) // processed after the answer on the socket thread
+        b.link.await { it.navigationPackets == 1L }
+        assertEquals(second, b.places.value!!.requestId)
+
+        val place = b.places.value!!.places.single()
+        assertTrue(b.sendDestination(place.label, place.placeId, place.location))
+        assertEquals(
+            ClientDestination("Tea House", "mock-Tea House", GeoPoint(33.78, -84.39)),
+            PerceptionCodec.decodeClient(texts.pollType("client.destination")!!),
+        )
+        assertTrue(b.sendDestination("Piedmont Park, Atlanta"))
+        assertEquals("""{"type":"client.destination","query":"Piedmont Park, Atlanta"}""", texts.pollType("client.destination"), "typed: query only")
+    }
+
+    @Test
     fun `server error is surfaced and cleared by the next session's hello`() = runBlocking {
         val serverWs = CompletableDeferred<WebSocket>()
         enqueue(onOpen = { ws -> serverWs.complete(ws) })
@@ -374,7 +432,7 @@ class PerceptionBridgeTest {
         // Like the server answering a hello it cannot honour: the error, then a hello of the SAME session.
         ws.send("""{"type":"perception.error","code":"unknownVideo","message":"no clip nope","fatal":false}""")
         ws.send(helloJson("idle", PerceptionMode.SIM, role = "watcher"))
-        ws.send(navJson("GO_STRAIGHT", 10.0)) // processed after the hello on the socket thread
+        ws.send(navJson("GO_STRAIGHT", 10.0, pts = 1.0)) // processed after the hello on the socket thread (sim packets carry pts)
         b.link.await { it.navigationPackets == 1L }
         assertEquals("unknownVideo no clip nope", b.link.await { it.serverError != null }.serverError, "kept: same session")
         ws.send(helloJson("sim-2", PerceptionMode.SIM, role = "controller"))

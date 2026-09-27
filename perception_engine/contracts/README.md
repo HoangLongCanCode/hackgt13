@@ -50,7 +50,7 @@ examples: [`docs/INTERFACES.md`](../docs/INTERFACES.md).
 # from perception_engine/ (project venv)
 .venv\Scripts\python.exe tests\test_protocol_v2.py --offline     # schemas well-formed, every sample validates, SDC1 round trip, wire builders
 .venv\Scripts\python.exe tests\test_protocol_v2.py               # + a real server loopback (live, sim, errors, skips)
-# from driving_assist/ (the module lives in perception_engine/android/perception-bridge)
+# from frontend/ (the module lives in perception_engine/android/perception-bridge)
 .\gradlew.bat :perception-bridge:test                            # ProtocolV2Test (decode + round-trip every sample), ContractFieldCoverageTest
 ```
 

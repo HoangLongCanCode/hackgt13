@@ -12,9 +12,12 @@ Usage (from a worker thread, never from the asyncio loop -- every call blocks on
     msg = relay.packet_at_pts(12.3)                      # ready-to-send 'navigation.packet' dict
     relay.start_live(destination="Georgia Tech", provider="mock")
     msg = relay.on_trip_state(client_trip_state_body)    # dict | None
+    places = relay.search("coffee", near={"lat": 33.7756, "lng": -84.3963})   # [{placeId, label, address, location}]
+    relay.start_live(destination_place={"label": places[0]["label"], "placeId": places[0]["placeId"],
+                                        "coordinate": places[0]["location"]})   # routed to exactly that point
     relay.close()
 
-Errors: the constructor and ``start_*`` raise :class:`NavRelayError` with a readable message.
+Errors: the constructor, ``start_*`` and ``search`` raise :class:`NavRelayError` with a readable message.
 ``packet_at_pts`` / ``on_trip_state`` never raise; they return ``None`` (and log, rate-limited)
 when there is no packet, and ``last_error`` then says why (it is cleared by the next packet; the
 server's NavWorker reports repeated failures to the clients). A crashed or hung child is restarted
@@ -37,6 +40,7 @@ import logging
 import math
 import os
 import queue
+import re
 import shutil
 import subprocess
 import threading
@@ -57,8 +61,19 @@ SETUP_HINT = (
 )
 
 
+_KEY_PARAM = re.compile(r"(?<![A-Za-z0-9_])(key=)[^&#\s'\"]+", re.IGNORECASE)
+
+
+def redact(text: object) -> str:
+    """Error text goes to the log and to every connected client: never let a `key=` URL parameter through."""
+    return _KEY_PARAM.sub(r"\1REDACTED", str(text))
+
+
 class NavRelayError(RuntimeError):
     """The navigation relay cannot do what was asked (setup, bad session, dead child...)."""
+
+    def __init__(self, message: object = "") -> None:
+        super().__init__(redact(message))
 
 
 class _ChildDied(Exception):
@@ -123,6 +138,7 @@ class NavRelay:
     START_TIMEOUT_S = 15.0  # node start-up until its 'ready' line
     CALL_TIMEOUT_S = 5.0  # at_pts / trip_state with a ready route
     ROUTE_TIMEOUT_S = 45.0  # start_live / first trip_state may call the Google APIs
+    SEARCH_TIMEOUT_S = 10.0  # search may call the Google Places / Geocoding APIs
     MIN_RESTART_INTERVAL_S = 1.0
     WARN_INTERVAL_S = 5.0
 
@@ -176,28 +192,45 @@ class NavRelay:
         origin: str | None = None,
         destination: str | None = None,
         provider: str = "mock",
+        destination_place: dict | None = None,
     ) -> None:
         """Live navigation from client.trip_state samples. Route: ``route_json`` (a phase1 route.json),
-        or ``destination`` (+ optional ``origin``, a place query or "lat,lng") resolved by the phase1
-        provider. Without ``origin`` the route is built from the first trip-state position."""
+        or ``destination_place`` ({label, placeId, coordinate: {lat, lng}}, a place picked from ``search``:
+        routed to exactly, not geocoded), or ``destination`` (a query resolved by the phase1 provider); both
+        with an optional ``origin`` (a place query or "lat,lng"). Without ``origin`` the route is built from
+        the first trip-state position."""
         request: dict[str, Any] = {"op": "start_live", "provider": provider or "mock"}
         if route_json:
             path = Path(route_json).expanduser().resolve()
             if not path.is_file():
                 raise NavRelayError(f"route file not found: {path}")
             request["routeJson"] = str(path)
-        elif destination:
-            request["destination"] = destination
+        elif destination_place or destination:
+            if destination_place:
+                try:
+                    coord = destination_place["coordinate"]
+                    request["destinationPlace"] = {
+                        "label": str(destination_place["label"]),
+                        "placeId": destination_place.get("placeId"),
+                        "coordinate": {"lat": float(coord["lat"]), "lng": float(coord["lng"])},
+                    }
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise NavRelayError(
+                        f"destination_place must be {{label, placeId, coordinate: {{lat, lng}}}}: {exc!r}"
+                    ) from None
+            else:
+                request["destination"] = destination
             if origin:
                 request["origin"] = origin
         else:
-            raise NavRelayError("start_live needs route_json or destination")
+            raise NavRelayError("start_live needs route_json or destination (or destination_place)")
         with self._lock:
             reply = self._call(request, self.ROUTE_TIMEOUT_S, replay=False)
             if not reply.get("ok"):
                 raise NavRelayError(f"start_live failed: {reply.get('error')}")
             route = reply.get("route")
-            # Replay the resolved route after a restart (no second geocode / Directions call).
+            # Replay the resolved route after a restart (no second geocode / Directions call); a route still
+            # pending replays this request, destination / destinationPlace included.
             self._restore = {"op": "start_live", "route": route, "provider": request["provider"]} if route else request
             self.mode = "live"
             self.info = reply.get("info") or {}
@@ -225,6 +258,25 @@ class NavRelay:
             route_pending = not (self._restore and self._restore.get("route"))
             timeout = self.ROUTE_TIMEOUT_S if route_pending else self.CALL_TIMEOUT_S
             return self._packet({"op": "trip_state", "sample": sample}, timeout)
+
+    def search(self, query: str, near: dict | None = None, provider: str = "mock") -> list[dict]:
+        """Destination search (any mode): places matching free text, best first, as
+        ``[{placeId, label, address, location: {lat, lng}}]`` (at most 8). ``near`` ({lat, lng}) biases the
+        results. The phase1 provider answers: Google Places Text Search (Geocoding fallback) or made-up mock
+        places. Raises NavRelayError (message redacted); one attempt of at most SEARCH_TIMEOUT_S."""
+        request: dict[str, Any] = {"op": "search", "query": query, "provider": provider or "mock"}
+        if near is not None:
+            try:
+                request["near"] = {"lat": float(near["lat"]), "lng": float(near["lng"])}
+            except (KeyError, TypeError, ValueError) as exc:
+                raise NavRelayError(f"search: near must be {{lat, lng}}: {exc!r}") from None
+        with self._lock:
+            # A dead child is restarted (and its navigation restored) first; a hung search is not retried.
+            reply = self._call(request, self.SEARCH_TIMEOUT_S, replay=True, retry=False)
+        if not reply.get("ok"):
+            raise NavRelayError(f"search failed: {reply.get('error')}")
+        places = reply.get("places")
+        return places if isinstance(places, list) else []
 
     def status(self) -> dict[str, Any]:
         with self._lock:
@@ -286,6 +338,7 @@ class NavRelay:
         return message
 
     def _no_packet(self, why: str) -> None:
+        why = redact(why)
         self.last_error = why
         self._warn(why)
         return None

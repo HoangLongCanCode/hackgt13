@@ -1,7 +1,12 @@
+// Error messages travel to the perception server's log and to every connected tablet: never include the API key.
+function redact(url) {
+  return String(url).replace(/([?&]key=)[^&#]*/gi, '$1REDACTED');
+}
+
 async function getJson(url) {
   const response = await fetch(url);
   if (!response.ok) {
-    throw new Error(`HTTP ${response.status} from ${url}`);
+    throw new Error(`HTTP ${response.status} from ${redact(url)}`);
   }
   return response.json();
 }
@@ -18,7 +23,7 @@ async function postJson(url, body, headers = {}) {
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`HTTP ${response.status} from ${url}: ${text}`);
+    throw new Error(`HTTP ${response.status} from ${redact(url)}: ${text}`);
   }
 
   return response.json();
@@ -27,4 +32,5 @@ async function postJson(url, body, headers = {}) {
 module.exports = {
   getJson,
   postJson,
+  redact,
 };

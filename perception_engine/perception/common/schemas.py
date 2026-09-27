@@ -73,14 +73,23 @@ class LaneState:
 
     Lanes are numbered 1..laneCount from the left. laneBoundaries holds
     polylines [[x, y], ...] in source-frame pixels, left to right.
+    boundaryColors / boundaryStyles are parallel to laneBoundaries (index i describes
+    laneBoundaries[i]): "yellow" | "white" | "unknown" and "solid" | "dashed" | "unknown".
+    None when the block has no per-line metadata.
     """
     currentLane: Optional[int]
     laneCount: Optional[int]
     laneBoundaries: list[list[list[float]]] = field(default_factory=list)
     confidence: float = 0.0
+    boundaryColors: Optional[list[str]] = None
+    boundaryStyles: Optional[list[str]] = None
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        d = asdict(self)
+        for k in ("boundaryColors", "boundaryStyles"):
+            if d[k] is None:
+                del d[k]
+        return d
 
 
 @dataclass
@@ -117,6 +126,8 @@ class RoadGeometry:
     horizonY: Optional[float] = None
     vanishingPoint: Optional[list[float]] = None  # [x, y]
     anchorPoints: list[dict[str, Any]] = field(default_factory=list)  # e.g. {"name": "lane_center_20m", "xy": [x, y]}
+    # outline of the visible drivable road [[x, y], ...] (<= 32 points; excludes dashboard / hood / pillars); [] = unknown
+    drivablePolygon: list[list[float]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
