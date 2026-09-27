@@ -4,10 +4,13 @@ import com.drivingassist.copilot.context.DrivingContext
 import com.drivingassist.copilot.context.FollowingInfo
 import com.drivingassist.copilot.context.FollowingState
 import com.drivingassist.copilot.context.Maneuver
+import com.drivingassist.copilot.context.NavigationState
+import com.drivingassist.copilot.context.PedestrianInfo
 import com.drivingassist.copilot.context.Priority
 import com.drivingassist.copilot.context.WorldSnapshot
 import com.drivingassist.copilot.perception.UplinkHeader
 import com.drivingassist.spatialcopilot.nav.RouteGuide
+import com.drivingassist.spatialcopilot.session.AppSettings
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -72,6 +75,52 @@ class VoiceRulesTest {
         val p2 = CuePolicy(catalog)
         run(p2, 0, 1_000, following(FollowingState.NORMAL, 25.0))
         assertTrue("stopped behind a car: display only", run(p2, 1_050, 3_000, following(FollowingState.CRITICAL, rel = 0.0)).isEmpty())
+    }
+
+    @Test
+    fun `stopped at a red light behind a car, the speed gate is on by default and nothing is spoken`() {
+        // With the gate the Driving Context holds CRITICAL at CLOSE while the route speed is below it (no TOO CLOSE pill).
+        assertTrue(AppSettings().gateCriticalBySpeed)
+        val p = CuePolicy(catalog)
+        run(p, 0, 1_000, following(FollowingState.NORMAL, 25.0))
+        assertTrue(run(p, 1_050, 5_000, following(FollowingState.CLOSE, 6.7, rel = 0.0)).isEmpty())
+    }
+
+    /** A pedestrian in the path [d] m ahead, the route speed [v] (null = unknown), the speed gate [gate] (null = off). */
+    private fun pedestrian(now: Long, d: Double?, v: Double?, gate: Double? = 1.5) = PolicyInput(
+        nowMs = now,
+        context = DrivingContext(
+            pedestriansInPath = listOfNotNull(d?.let { PedestrianInfo(trackId = 4, distanceMeters = it, ttcSeconds = null) }),
+            navigation = NavigationState(Maneuver.FOLLOW_ROAD, 500.0, egoSpeedMps = v),
+        ),
+        world = WorldSnapshot.EMPTY, linkConnected = true, takenOver = false, simPaused = false, hostVisible = true, route = null,
+        routeDistanceMeters = null, live = false, gpsAccuracyMeters = null, speedGateMps = gate,
+    )
+
+    private fun peds(p: CuePolicy, from: Long, to: Long, d: Double?, v: Double?, gate: Double? = 1.5): List<CueRequest> =
+        (from..to step 50).flatMap { p.step(pedestrian(it, d, v, gate)) }.filter { it.cueId == CuePolicy.PED_CRIT || it.cueId == CuePolicy.PED_ALERT }
+
+    @Test
+    fun `no pedestrian cue while stopped with the speed gate on, as before when moving or with an unknown speed`() {
+        // People crossing 8 m in front of a car waiting at a light (0 m/s, gate 1.5 m/s): neither cue.
+        assertTrue(peds(CuePolicy(catalog), 0, 5_000, 8.0, 0.0).isEmpty())
+        assertTrue("alert range too", peds(CuePolicy(catalog), 0, 5_000, 20.0, 1.2).isEmpty())
+        for ((name, v, gate) in listOf(Triple("moving", 5.0, 1.5), Triple("unknown speed", null, 1.5), Triple("gate off", 0.0, null))) {
+            val crit = peds(CuePolicy(catalog), 0, 3_000, 8.0, v, gate)
+            assertEquals(name, listOf("Pedestrian very close."), crit.map { it.text })
+            assertEquals(name, listOf("Pedestrian ahead."), peds(CuePolicy(catalog), 0, 3_000, 20.0, v, gate).map { it.text })
+        }
+        // Driving off with the pedestrian still in the path: the persistence starts over, then the cue.
+        val p = CuePolicy(catalog)
+        assertTrue(peds(p, 0, 2_000, 8.0, 0.4).isEmpty())
+        val off = peds(p, 2_050, 3_000, 8.0, 3.0)
+        assertEquals(1, off.size)
+        assertTrue(off.single().createdMs >= 2_050 + 200)
+        // The episode went on while stopped: stopping and driving off again with the same pedestrian repeats nothing.
+        val a = CuePolicy(catalog)
+        assertEquals(1, peds(a, 0, 2_000, 20.0, 5.0).size)
+        assertTrue(peds(a, 2_050, 6_000, 20.0, 0.0).isEmpty())
+        assertTrue(peds(a, 6_050, 9_000, 20.0, 5.0).isEmpty())
     }
 
     @Test

@@ -22,6 +22,12 @@ data class FollowingThresholds(
     val closeExitHeadwaySeconds: Double = 1.8,
     val criticalEnterHeadwaySeconds: Double = 0.8,
     val criticalExitHeadwaySeconds: Double = 1.0,
+    /**
+     * TOO CLOSE (CRITICAL) needs a measured distance below this, whatever the TTC / headway say (left above
+     * [criticalMaxExitMeters]): at highway speed a 0.8 s headway alone meant warnings at 15-22 m.
+     */
+    val criticalMaxMeters: Double = 12.0,
+    val criticalMaxExitMeters: Double = 13.0,
 )
 
 enum class Units { METRIC, IMPERIAL }
@@ -31,12 +37,24 @@ data class DrivingContextConfig(
     val following: FollowingThresholds = FollowingThresholds(),
     val leadMaxDistanceMeters: Double = 80.0,
     /**
-     * When set, a CRITICAL following state is held at CLOSE while the ego speed
-     * ([NavigationState.egoSpeedMps], the route's `progress.speedMps`) is known and below this many m/s:
-     * sitting behind a stopped car is close, not closing in. Null (default) = off. An unknown speed
-     * never gates. The thresholds above are not speed-aware on their own.
+     * Without a stable [LaneLayout] the lead vehicle must be within this many metres of the car's ground track
+     * (see [WorldSnapshot.leadVehicle]); about half a lane, so cars in the next lane are not the lead.
+     */
+    val leadCorridorHalfWidthMeters: Double = 1.0,
+    /**
+     * When set, a CRITICAL following state is held at CLOSE while the ego speed ([NavigationState.egoSpeedMps]: the
+     * bridge's [EgoSpeedEstimator], the smaller of the route's traveled-distance speed and its lagging
+     * `progress.speedMps`) is known and below this many m/s: sitting behind a stopped car is close, not closing in. A
+     * pedestrian in the path is then a TRAFFIC_ALERT, never CRITICAL_SAFETY (waiting at a crosswalk). Null (default) =
+     * off. An unknown speed never gates. The thresholds above are not speed-aware on their own.
      */
     val criticalMinEgoSpeedMps: Double? = null,
+    /**
+     * A lead distance whose server `distanceConfidence` is below this is cross-checked with the flat-ground distance of
+     * the lead's box bottom ([WorldSnapshot.flatGroundDistanceMeters]); the larger one is used for the following state
+     * and shown ([FollowingInfo.distanceMeters]). Placeholder.
+     */
+    val leadDistanceCheckMaxConfidence: Double = 0.3,
 
     val lightAlertMaxDistanceMeters: Double = 100.0,
     /** No relevant light for this long: the next light is announced again. */
@@ -56,18 +74,27 @@ data class DrivingContextConfig(
 
     /** Lane guidance starts this far before the maneuver. */
     val laneGuidanceStartMeters: Double = 2000.0,
-    /** Lane side only inferred from the turn direction (the route gave no required lane): start this late instead. */
-    val inferredLaneGuidanceStartMeters: Double = 300.0,
+    /**
+     * Lane side only inferred from the turn direction (the route gave no required lane): start this late instead. 450 m:
+     * on real_011 the car slowed to 12-15 m/s on the way to a left turn, and 300 m left too little room for a lane change
+     * in traffic.
+     */
+    val inferredLaneGuidanceStartMeters: Double = 450.0,
     /**
      * With a known ego speed the inferred start moves out to this many seconds of travel, capped at
-     * [inferredLaneGuidanceMaxMeters]: 300 m is 11 s at highway speed, too little to change lanes before the exit.
+     * [inferredLaneGuidanceMaxMeters]: 450 m is 16 s at highway speed, too little to change lanes before the exit.
      */
     val inferredLaneGuidanceLeadSeconds: Double = 20.0,
     val inferredLaneGuidanceMaxMeters: Double = 800.0,
     /** At or below this distance navigation becomes IMMEDIATE_NAVIGATION. */
     val immediateNavigationMeters: Double = 300.0,
-    val minLaneConfidence: Double = 0.3,
-    val maxLanesAgeSeconds: Double = 1.0,
+    /**
+     * Lane numbers come from [WorldSnapshot.laneLayout] when it is [LaneLayout.stable] (the WorldModel's quality
+     * hysteresis) and at most this old (also the bar for picking the lead in the ego lane). Otherwise the lane is
+     * unknown: the server's own `lanes.currentLane` / `laneCount` are never used (on the recorded drives it said lane 1
+     * of 1-3 throughout, confidently, even with four to six lines visible).
+     */
+    val maxLayoutAgeSeconds: Double = LaneLayout.MAX_USABLE_AGE_SECONDS,
 
     val signMinConfidence: Double = 0.5,
     /** Sign must be seen in this many frames before it is announced (filters one-frame false positives). */

@@ -56,10 +56,15 @@ object NavigationMapper {
      * Null when the packet has no active maneuver or no distance to it (nothing to guide towards).
      * @param inferLaneSide when phase1 gives no `requiredLane`, derive LEFT/RIGHT from the maneuver
      *   direction (turn / keep / merge side) and mark it [NavigationState.laneHintInferred].
+     * @param egoSpeed the packet stream's [EgoSpeedEstimator]: every packet is fed to it (also one that maps to null) and
+     *   [NavigationState.egoSpeedMps] is its speed (min of the traveled-distance speed and `progress.speedMps`); null =
+     *   `progress.speedMps` as it is.
      */
-    fun toNavigationState(message: NavigationPacketMessage, inferLaneSide: Boolean = true): NavigationState? {
+    fun toNavigationState(message: NavigationPacketMessage, inferLaneSide: Boolean = true, egoSpeed: EgoSpeedEstimator? = null): NavigationState? {
+        val speed = egoSpeed?.update(message)
         val rs = message.routeState ?: return null
-        return toNavigationState(rs, message.packet, inferLaneSide, message.speedLimit)
+        val state = toNavigationState(rs, message.packet, inferLaneSide, message.speedLimit) ?: return null
+        return if (egoSpeed == null) state else state.copy(egoSpeedMps = speed)
     }
 
     fun toNavigationState(

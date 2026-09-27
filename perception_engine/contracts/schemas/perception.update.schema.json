@@ -295,6 +295,28 @@
         },
         "confidence": {
           "type": "number"
+        },
+        "boundaryColors": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "yellow",
+              "white",
+              "unknown"
+            ]
+          },
+          "description": "Optional, parallel to laneBoundaries (same order and length; index i describes laneBoundaries[i]): paint colour of each line. In the US a yellow line is the left edge of the ego direction of travel. Absent when the lanes block has no per-line metadata."
+        },
+        "boundaryStyles": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "solid",
+              "dashed",
+              "unknown"
+            ]
+          },
+          "description": "Optional, parallel to laneBoundaries (same order and length; index i describes laneBoundaries[i]): solid or dashed paint. Absent when the lanes block has no per-line metadata."
         }
       }
     },
@@ -364,6 +386,14 @@
               }
             }
           }
+        },
+        "drivablePolygon": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/point"
+          },
+          "maxItems": 32,
+          "description": "Optional (v2): outline of the visible drivable road, closed polygon of [x, y] px (at most 32 points, simplified). It excludes the dashboard, hood and A-pillars, so the tablet keeps AR content inside it. Empty when unknown."
         }
       }
     }

@@ -9,7 +9,9 @@ messages: contracts/PROTOCOL_v2.md and contracts/schemas/. Run from perception_e
     python -m perception.realtime.server --mode auto                  # live or sim, whichever the client's hello asks
   common:     [--host 0.0.0.0] [--port 8765] [--config perception/config_realtime.yaml] [--set KEY=VALUE ...]
               [--max-in-flight 2] [--lookahead auto|SECONDS] [--start-on-connect]
-  navigation: --nav-session DIR (phase1 session: sim/video) | --nav-route route.json | --nav-destination "QUERY"
+  navigation: sim/video: a clip recorded with its session (data/sim_videos/<id>/: video.mp4 + session_manifest.json +
+              route.json + trip_state.jsonl) navigates by itself; --nav-session DIR for clips without one (BDD100K)
+              live: --nav-route route.json | --nav-destination "QUERY" | --nav-live
               [--nav-origin "QUERY"] [--nav-provider mock|google] (live) [--phase1-dir DIR] [--node node]
               [--speed-limits off|osm] [--speed-limit-endpoint URL]   navigation.packet.speedLimit (speed_limit.py)
   tts:        [--no-tts] [--tts-allow-lan]   ElevenLabs proxy POST /tts, GET /tts/health (tts_proxy.py)
@@ -47,6 +49,7 @@ import contextlib
 import dataclasses
 import importlib
 import itertools
+import json
 import math
 import os
 import socket
@@ -621,11 +624,75 @@ def load_nav_relay_class(spec: Optional[str]) -> tuple[Optional[type], Optional[
         return None, f"{type(e).__name__}: {e}"
 
 
+NAV_SESSION_FILES = ("session_manifest.json", "route.json", "trip_state.jsonl")
+
+
+def read_nav_manifest(session_dir: Path) -> Optional[dict[str, Any]]:
+    """session_manifest.json of a phase1 session folder, or None when missing / not a JSON object."""
+    try:
+        m = json.loads((Path(session_dir) / "session_manifest.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return m if isinstance(m, dict) else None
+
+
+def nav_session_video_id(session_dir: Path) -> str:
+    """The clip a phase1 session was recorded for: its manifest's videoId, else the folder name."""
+    vid = (read_nav_manifest(session_dir) or {}).get("videoId")
+    return str(vid) if vid else Path(session_dir).name
+
+
+def own_nav_session(clip: Optional[Path]) -> Optional[Path]:
+    """The phase1 session a clip was recorded with: the clip's folder when session_manifest.json, route.json and
+    trip_state.jsonl sit next to it and the manifest's videoFile (default video.mp4) is the clip
+    (data/sim_videos/real_009/video.mp4). None otherwise, e.g. a BDD100K clip: its demo session lives in
+    nav/demo_sessions/<id>/ without the clip and is given with --nav-session."""
+    if clip is None:
+        return None
+    clip = Path(clip)
+    folder = clip.parent
+    if not all((folder / f).is_file() for f in NAV_SESSION_FILES):
+        return None
+    m = read_nav_manifest(folder)
+    return folder if m is not None and str(m.get("videoFile") or "video.mp4") == clip.name else None
+
+
+def same_dir(a: Optional[Path], b: Optional[Path]) -> bool:
+    if a is None or b is None:
+        return a is b
+    with contextlib.suppress(OSError):
+        return Path(a).resolve() == Path(b).resolve()
+    return Path(a) == Path(b)
+
+
+def choose_nav_session(video_id: Optional[str], clip: Optional[Path], explicit: Optional[Path]
+                       ) -> tuple[Optional[Path], Optional[str], Optional[str]]:
+    """Which phase1 session drives sim / video navigation while `video_id` (file `clip`) plays:
+    (session folder or None, source "clip" | "--nav-session" | None, mismatch message or None).
+    The clip's own session (own_nav_session) always wins, also over an --nav-session recorded for another clip, so
+    the instructions are never another drive's. Without one, --nav-session is used; when its manifest names another
+    video the message says so ("navigation session is for real_010, the clip is real_009")."""
+    own = own_nav_session(clip)
+    if own is not None:
+        return own, "clip", None
+    if explicit is None:
+        return None, None, None
+    for_vid = nav_session_video_id(explicit)
+    note = None if video_id is None or for_vid == video_id else \
+        f"navigation session is for {for_vid}, the clip is {video_id}"
+    return explicit, "--nav-session", note
+
+
 class NavWorker(threading.Thread):
     """Owns the NavRelay (a Node child process speaking JSON lines). Every relay call happens in this thread.
     sim/video: one relay.packet_at_pts(current media pts) per ~0.5 s of playback (and after a seek);
     live: relay.on_trip_state(sample) for each client.trip_state. Results are broadcast as navigation.packet.
     Destination search (client.place_search): relay.search(...) -> one navigation.places to the asking client only.
+
+    Sim session: the server picks it per clip (choose_nav_session) and calls set_session on the loop; run() then
+    restarts the relay on it (relay.start_sim). Packets computed for an older session are dropped on the loop, so a
+    clip switch never shows the previous drive's instructions. No session (a clip without one and no
+    --nav-session): no relay calls, the hello says navigation mode "off".
 
     Health: the relay's calls return None instead of raising when phase1 fails (NavRelay restarts a crashed child
     by itself). NAV_FAIL_THRESHOLD calls in a row without a packet set available=False with the reason, re-announce
@@ -636,10 +703,20 @@ class NavWorker(threading.Thread):
     Speed limits (--speed-limits osm): every published packet gets a top-level `speedLimit` (the OpenStreetMap value
     for packet.progress.currentLocation, or null when unknown); with the flag off the field is absent."""
 
-    def __init__(self, srv: "Server", relay_cls: type, a: argparse.Namespace):
+    def __init__(self, srv: "Server", relay_cls: type, a: argparse.Namespace, mode: Optional[str] = None):
         super().__init__(name="nav-worker", daemon=True)
         self.srv, self.relay_cls, self.a = srv, relay_cls, a
-        self.mode = "sim" if a.nav_session else "live"
+        self.mode = mode or ("sim" if a.nav_session else "live")
+        # sim: the session folder navigation replays (set_session; --nav-session until a clip picks one)
+        explicit = Path(a.nav_session) if a.nav_session else None
+        self.session: Optional[Path] = (explicit if explicit is None or explicit.is_absolute()
+                                        else PROJECT_ROOT / explicit)
+        self.session_source: Optional[str] = "--nav-session" if explicit else None
+        self.session_video: Optional[str] = nav_session_video_id(self.session) if self.session else None
+        self.session_note: Optional[str] = None      # mismatch message, reported as navigation.error
+        self.session_gen = 0                         # bumped by set_session (loop); older packets are dropped
+        self.pending_session = self.mode == "sim" and self.session is not None
+        self.running_gen: Optional[int] = None       # generation the relay replays (None: no session running)
         self.relay: Any = None
         self.running = False                 # the relay started (start_sim / start_live succeeded)
         self.available = False               # running and producing packets
@@ -657,8 +734,30 @@ class NavWorker(threading.Thread):
         self.speed_limits: Any = make_speed_limits(a)   # OsmSpeedLimits or None (--speed-limits off)
 
     def info(self) -> dict[str, Any]:
-        return {"mode": self.mode, "available": self.available, "error": self.error,
+        if self.mode == "sim" and self.session is None:          # this clip has no session: no navigation
+            return {"mode": "off", "available": False, "error": self.error, "destination": None}
+        return {"mode": self.mode, "available": self.available, "error": self.error or self.session_note,
                 "destination": self.destination if self.mode == "live" else None}
+
+    def session_info(self) -> Optional[dict[str, Any]]:
+        """perception.hello server.navigationSession: which recorded session drives sim navigation (None: none)."""
+        if self.mode != "sim" or self.session is None:
+            return None
+        return {"id": self.session.name, "videoId": self.session_video, "source": self.session_source}
+
+    def set_session(self, session: Optional[Path], source: Optional[str], note: Optional[str]) -> bool:
+        """Sim: replay `session` from now on (None: no navigation for this clip). Called on the loop; run() restarts
+        the relay. Returns True when the session changed (the caller drops the last packet)."""
+        with self.cond:
+            changed = not same_dir(session, self.session)
+            self.session_source, self.session_note = source, note
+            if changed:
+                self.session = session
+                self.session_video = nav_session_video_id(session) if session is not None else None
+                self.session_gen += 1
+                self.pending_session = True
+                self.cond.notify()
+        return changed
 
     def set_destination(self, query: str, place: Optional[dict[str, Any]] = None) -> None:
         """Live: a new target from the tablet. The relay restarts live navigation with it (in run()); the route is
@@ -762,7 +861,35 @@ class NavWorker(threading.Thread):
         msg = make_places(request_id, query, provider, places, error)
         self.srv.post(self.srv.deliver_places, key, dumps(msg).decode())
 
-    def _publish(self, pkt: dict[str, Any]) -> None:
+    def _apply_session(self, gen: int, session: Optional[Path]) -> None:
+        """Sim: restart the relay on `session` (generation `gen`); None stops the packets (the relay idles)."""
+        self.running_gen, self.failures = None, 0
+        if session is None:
+            self.available, self.error = False, None
+            print("[nav] no navigation session for this clip: navigation off until a clip with one plays", flush=True)
+            self.srv.post(self.srv.broadcast_hello, False)
+            return
+        try:
+            self.relay.start_sim(str(session))
+        except Exception as e:
+            self.available = False
+            self.error = f"navigation session {session.name} not usable: {type(e).__name__}: {e}"
+            print(f"[nav] {self.error}", flush=True)
+            self.srv.post(self.srv.broadcast_error, "internal", self.error)
+            self.srv.post(self.srv.broadcast_hello, False)
+            return
+        self.running_gen = gen
+        self.available, self.error = True, None
+        print(f"[nav] sim session {session.name} (recorded for {self.session_video}; {self.session_source})",
+              flush=True)
+        self.srv.post(self.srv.broadcast_hello, False)
+
+    def _deliver_nav(self, gen: int, data: str) -> None:
+        """(loop) A sim packet, unless the clip switched to another session after it was computed."""
+        if gen == self.session_gen:
+            self.srv.broadcast_nav(data)
+
+    def _publish(self, pkt: dict[str, Any], gen: Optional[int] = None) -> None:
         self.packets += 1
         if self.speed_limits is not None:
             try:
@@ -771,7 +898,10 @@ class NavWorker(threading.Thread):
                 limit = None
                 print(f"[nav] speed limit lookup failed: {type(e).__name__}: {e}", flush=True)
             pkt = {**pkt, "speedLimit": limit}
-        self.srv.post(self.srv.broadcast_nav, dumps(pkt).decode())
+        if gen is None:
+            self.srv.post(self.srv.broadcast_nav, dumps(pkt).decode())
+        else:
+            self.srv.post(self._deliver_nav, gen, dumps(pkt).decode())
 
     def run(self) -> None:
         a = self.a
@@ -780,13 +910,11 @@ class NavWorker(threading.Thread):
             self.relay = self.relay_cls(node_exe=a.node, **kw)
             # --nav-live without --nav-route / --nav-destination: wait for the tablet's client.destination.
             waiting = self.mode == "live" and not (a.nav_route or a.nav_destination)
-            if self.mode == "sim":
-                self.relay.start_sim(str(a.nav_session))
-            elif not waiting:
+            if self.mode == "live" and not waiting:
                 self.relay.start_live(route_json=a.nav_route, origin=a.nav_origin, destination=a.nav_destination,
                                       provider=a.nav_provider)
             self.running = True
-            self.available = not waiting
+            self.available = self.mode == "live" and not waiting      # sim: once a session started (below)
             self.error = 'waiting for a destination (client.destination from the tablet)' if waiting else None
             print(f"[nav] relay running ({self.mode}{', ' + self.error if waiting else ''})", flush=True)
         except Exception as e:
@@ -797,13 +925,19 @@ class NavWorker(threading.Thread):
         try:
             while not self.stop_evt.is_set():
                 with self.cond:
-                    if not self.trips and self.pending_destination is None and not self.searches:
+                    if (not self.trips and self.pending_destination is None and not self.searches
+                            and not self.pending_session):
                         self.cond.wait(0.1)
                     trips = list(self.trips)
                     self.trips.clear()
                     searches = list(self.searches)
                     self.searches.clear()
                     dest, self.pending_destination = self.pending_destination, None
+                    switch = (self.session_gen, self.session) if self.pending_session else None
+                    self.pending_session = False
+                if switch is not None and self.mode == "sim":
+                    self._apply_session(*switch)
+                    last_pts = None                          # first packet of the new session right away
                 if dest is not None and self.mode == "live":
                     self._apply_destination(*dest)
                 for sample, _key in trips:
@@ -813,14 +947,15 @@ class NavWorker(threading.Thread):
                 for search in searches:                      # after the trips: a Google search may take ~1 s
                     self._search(*search)
                 if self.mode == "sim":
-                    pts = self.srv.media_pts_now()
+                    gen = self.running_gen
+                    pts = self.srv.media_pts_now() if gen is not None else None
                     if pts is None:
                         continue
                     if last_pts is None or abs(pts - last_pts) >= NAV_PERIOD_S:
                         last_pts = pts
                         pkt = self._call(self.relay.packet_at_pts, float(pts))
                         if pkt is not None:
-                            self._publish(pkt)
+                            self._publish(pkt, gen)
         finally:
             with contextlib.suppress(Exception):
                 self.relay.close()
@@ -844,7 +979,8 @@ class Server:
         self.announced: Optional[tuple] = None
         self.desc = engine.describe()
         self.video_dirs = [self._abs(Path(d)) for d in list(DEFAULT_VIDEO_DIRS) + list(a.video_dir or [])]
-        self.session_dirs = [self._abs(Path(a.nav_session))] if a.nav_session else []
+        self.nav_session_arg: Optional[Path] = self._abs(Path(a.nav_session)) if a.nav_session else None
+        self.session_dirs = [self.nav_session_arg] if self.nav_session_arg else []
         self.videos = index_videos(self.video_dirs, self.session_dirs) if "sim" in self.accepted else {}
         self.video_src: Optional[VideoSource] = None
         self.sim_src: Optional[SimSource] = None
@@ -893,6 +1029,50 @@ class Server:
             return self.nav.info()
         return {"mode": "off", "available": False, "error": self.nav_unavailable}
 
+    def nav_session_info(self) -> Optional[dict[str, Any]]:
+        return self.nav.session_info() if self.nav is not None else None
+
+    def sim_nav(self) -> bool:
+        """Navigation follows recorded sessions by media time: --nav-session, or no live navigation flag at all."""
+        a = self.a
+        return bool(a.nav_session) or not (a.nav_route or a.nav_destination or getattr(a, "nav_live", False))
+
+    def start_nav_worker(self) -> bool:
+        """Starts the NavWorker (sim or live, by the flags); False when the relay module cannot be imported."""
+        if self.nav is not None:
+            return True
+        if self.nav_unavailable:
+            return False
+        cls, err = load_nav_relay_class(self.a.nav_relay_impl)
+        if cls is None:
+            self.nav_unavailable = f"perception.realtime.nav_relay not importable: {err}"
+            print(f"[nav] {self.nav_unavailable}; continuing without navigation", flush=True)
+            return False
+        self.nav = NavWorker(self, cls, self.a, mode="sim" if self.sim_nav() else "live")
+        self.nav.start()
+        return True
+
+    def select_nav_session(self, video_id: Optional[str], clip: Optional[Path]) -> Optional[str]:
+        """Sim / video: point navigation at the session of the clip now playing (choose_nav_session: the clip's own
+        session, else --nav-session). Starts the nav worker the first time a clip brings its own session, so a
+        recorded drive navigates without any nav flag. Live navigation (GPS trip states) is left alone. Returns the
+        mismatch message when --nav-session is for another video (the caller tells the controller)."""
+        if not self.sim_nav():
+            return None
+        session, source, note = choose_nav_session(video_id, clip, self.nav_session_arg)
+        explicit = self.nav_session_arg
+        if source == "clip" and explicit is not None and not same_dir(session, explicit):
+            print(f"[nav] {video_id} has its own session ({session.name}): it drives navigation instead of "
+                  f"--nav-session {explicit.name} (recorded for {nav_session_video_id(explicit)})", flush=True)
+        elif note:
+            print(f"[nav] {note}: --nav-session {explicit.name} kept (the clip has no session of its own)",
+                  flush=True)
+        if self.nav is None and (session is None or not self.start_nav_worker()):
+            return None
+        if self.nav.mode == "sim" and self.nav.set_session(session, source, note):
+            self.last_nav = None                  # the previous session's packet must not reach a new client
+        return note
+
     def hello_for(self, c: Optional[Client]) -> str:
         s = self.session
         uplink = ({"maxInFlight": self.max_in_flight, **PREFERRED_UPLINK} if "live" in self.accepted else None)
@@ -906,7 +1086,8 @@ class Server:
         msg = make_hello(s.id, s.source, self.desc, mode=s.mode, accepted_modes=self.accepted, image=s.image,
                          camera=s.camera, source_fps=s.source_fps, uplink=uplink, sim=sim,
                          server={"modeArg": self.mode_arg, "wsPath": "/perception", "port": self.a.port,
-                                 "loop": bool(self.a.loop), "maxInFlight": self.max_in_flight},
+                                 "loop": bool(self.a.loop), "maxInFlight": self.max_in_flight,
+                                 "navigationSession": self.nav_session_info()},
                          navigation=self.nav_info(), role=role)
         return dumps(msg).decode()
 
@@ -1153,6 +1334,8 @@ class Server:
             self.live_seq = 0
             self.live_first_ns = None
         c.role = "controller"
+        if self.nav is not None and self.nav.mode == "sim":
+            self.select_nav_session(None, None)                 # a camera has no recorded session of its own
         self.broadcast_hello()
 
     def video_dirs_text(self) -> str:
@@ -1204,8 +1387,13 @@ class Server:
                                    controller=c.key, video_id=video_id, source_fps=info.fps)
             self.sim_src = src
         c.role = "controller"
+        note = self.select_nav_session(video_id, path)          # this clip's own session drives navigation
         src.start()
         self.broadcast_hello()
+        if note:                                                # after the hello: a new session clears errors
+            c.error("internal", f"{note}: its instructions are not for this drive (the clip has no session of its "
+                                "own; give --nav-session the clip's session)",
+                    detail={"videoId": video_id, "navigationSession": self.nav_session_info()}, min_interval_s=0)
         return True
 
     def _sim_unavailable(self, c: Client, video_id: str) -> None:
@@ -1225,6 +1413,7 @@ class Server:
             self.session = Session(new_session_id(f"sim-{video_id}"), "sim", {"kind": "video", "id": video_id},
                                    controller=c.key, video_id=video_id)
         c.role = "controller"
+        self.select_nav_session(video_id, None)                 # no clip: --nav-session or nothing
         self.broadcast_hello()
 
     def end_session(self, c: Client) -> None:
@@ -1449,7 +1638,7 @@ class Server:
             if not c.nav_error_sent:
                 c.nav_error_sent = True
                 if self.nav is not None and self.nav.mode == "sim":
-                    why = "the server runs sim navigation (--nav-session)"
+                    why = "the server runs sim navigation (a recorded session by media time)"
                 elif self.nav is not None and self.nav.error:
                     why = self.nav.error
                 else:
@@ -1551,6 +1740,7 @@ class Server:
                              "droppedFrames": c.dropped_frames, "droppedUpdates": c.dropped_updates}
                             for c in list(self.clients.values())],
                 "stats": self.stats_msg(), "laneWarmupMs": self.pipe.warmup_ms, "navigation": self.nav_info(),
+                "navigationSession": self.nav_session_info(),
                 "navigationLastCallMs": self.nav.last_ms if self.nav else None,
                 "videoFinished": bool(self.video_src and self.video_src.finished),
                 "sim": None if src is None else {"videoId": src.video_id, "lookaheadSeconds": round(src.lookahead, 3),
@@ -1570,13 +1760,9 @@ class Server:
                 self.start_evt.set()
             self.video_src.start()
         if self.a.nav_session or self.a.nav_route or self.a.nav_destination or getattr(self.a, "nav_live", False):
-            cls, err = load_nav_relay_class(self.a.nav_relay_impl)
-            if cls is None:
-                self.nav_unavailable = f"perception.realtime.nav_relay not importable: {err}"
-                print(f"[nav] {self.nav_unavailable}; continuing without navigation", flush=True)
-            else:
-                self.nav = NavWorker(self, cls, self.a)
-                self.nav.start()
+            self.start_nav_worker()
+        if self.mode_arg == "video":                            # the laptop's clip: its own session wins too
+            self.select_nav_session(self.a.video.stem, self.a.video)
 
     def stop(self) -> None:
         if self.video_src is not None:
@@ -1701,7 +1887,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="config override (YAML value), e.g. --set slow.max_hz=6 --set slow_schedule.depth.every=2")
     ap.add_argument("--no-lane-warmup", action="store_true", help="skip the per-lane warm-up (first frames slow)")
     nav = ap.add_argument_group("navigation (optional; phase1 route engine via perception.realtime.nav_relay)")
-    nav.add_argument("--nav-session", default=None, help="phase1 session folder (sim/video: timeline by media pts)")
+    nav.add_argument("--nav-session", default=None,
+                     help="phase1 session folder (sim/video: timeline by media pts) for clips without their own; a "
+                          "clip whose folder holds its session (data/sim_videos/real_009/) always uses that one")
     nav.add_argument("--nav-route", default=None, help="live: route.json to follow")
     nav.add_argument("--nav-live", action="store_true",
                      help="live navigation with the destination typed on the tablet (client.destination); "
@@ -1741,8 +1929,8 @@ def main(argv: Optional[list[str]] = None) -> None:
         if not a.video.exists():
             sys.exit(f"video not found: {a.video}")
     if a.speed_limits == "osm" and not (a.nav_session or a.nav_route or a.nav_destination or a.nav_live):
-        print("[server] note: --speed-limits osm rides on navigation.packet; without navigation it does nothing",
-              flush=True)
+        print("[server] note: --speed-limits osm rides on navigation.packet; without a navigation flag only clips "
+              "with their own session navigate", flush=True)
     if a.nav_session and a.mode == "live":
         print("[server] note: --nav-session drives navigation from media time (sim/video); in live mode use "
               "--nav-route / --nav-destination", flush=True)
@@ -1776,8 +1964,12 @@ def main(argv: Optional[list[str]] = None) -> None:
         print(f"  LAN (Wi-Fi) : ws://{ip}:{a.port}/perception")
     print(f"  USB (adb)   : adb reverse tcp:{a.port} tcp:{a.port}   then ws://127.0.0.1:{a.port}/perception")
     if a.nav_session or a.nav_route or a.nav_destination or a.nav_live:
-        print("  navigation  : " + (f"sim session {a.nav_session}" if a.nav_session else
+        print("  navigation  : " + (f"sim session {a.nav_session} (a clip with its own session uses that one)"
+                                    if a.nav_session else
                                     f"live ({a.nav_provider}) route={a.nav_route} dest={a.nav_destination}")
+              + ("  speed limits: OpenStreetMap" if a.speed_limits == "osm" else ""))
+    elif "sim" in srv.accepted or a.mode == "video":
+        print("  navigation  : from the clip's own session (data/sim_videos/<id>/) when it has one"
               + ("  speed limits: OpenStreetMap" if a.speed_limits == "osm" else ""))
     if a.tts_allow_lan:
         tts_host = a.host if a.host not in ("0.0.0.0", "::", "") else (lan_ips() or ["<laptop-LAN-IP>"])[0]

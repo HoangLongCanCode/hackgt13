@@ -28,6 +28,39 @@ from .backends import WORK_H, WORK_W, make_backend
 from .postprocess import LineTracker, PostConfig, boundary_x, ego_lane_polygon, process_masks, x_of
 
 BACKENDS = ("twinlitenetplus_large", "twinlitenetplus_medium", "yolop_onnx", "comma10k_segnet")
+LINE_COLORS = ("yellow", "white", "unknown")    # LaneState.boundaryColors values
+LINE_STYLES = ("solid", "dashed", "unknown")     # LaneState.boundaryStyles values
+DRIVABLE_POLY_MAX_POINTS = 32       # RoadGeometry.drivablePolygon (schema maxItems)
+DRIVABLE_MIN_AREA_FRAC = 0.002      # a smaller largest region is noise, not road: no outline
+DRIVABLE_BRIDGE_PX = (15, 7)        # work px (w, h): the drivable head leaves lane / stop lines out; close them
+
+
+def drivable_outline(drv: np.ndarray, sx: float, sy: float,
+                     max_points: int = DRIVABLE_POLY_MAX_POINTS) -> list[list[float]]:
+    """Outline of the drivable road for AR clipping. The drivable head cuts the road into one region per lane
+    (painted lines are not drivable), so gaps under DRIVABLE_BRIDGE_PX are closed first (an A-pillar or a
+    median is much wider). Then the largest connected region, outer contour only (a car inside the road is
+    filled), simplified with approxPolyDP to <= max_points and scaled by (sx, sy) to frame px, rounded to 0.1.
+    The mask stops at the dashboard / hood / A-pillars, so the outline excludes them. [] = no drivable region."""
+    bw, bh = DRIVABLE_BRIDGE_PX
+    m = cv2.morphologyEx(drv.astype(np.uint8), cv2.MORPH_CLOSE, np.ones((bh, bw), np.uint8))
+    n, lab, stats, _ = cv2.connectedComponentsWithStats(m, connectivity=8)
+    if n < 2:
+        return []
+    big = int(np.argmax(stats[1:, cv2.CC_STAT_AREA])) + 1
+    if stats[big, cv2.CC_STAT_AREA] < DRIVABLE_MIN_AREA_FRAC * m.size:
+        return []
+    cs, _ = cv2.findContours((lab == big).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not cs:
+        return []
+    c = max(cs, key=cv2.contourArea)
+    eps, poly = 1.0, c.reshape(-1, 2)
+    while len(poly) > max_points:
+        poly = cv2.approxPolyDP(c, eps, True).reshape(-1, 2)
+        eps *= 1.4
+    if len(poly) < 3:
+        return []
+    return [[round(float(x) * sx, 1), round(float(y) * sy, 1)] for x, y in poly]
 
 
 @dataclass
@@ -269,11 +302,15 @@ class LaneDetector:
         if self.smoother is not None:
             kinds_ok = ok and st["L0"]["kind"] in ("line", "tracked") and st["R0"]["kind"] in ("line", "tracked")
             nL, nR, conf, event = self.smoother.update(nL, nR, conf, offset, offset_valid=kinds_ok)
+        # per-line colour / style, 1:1 with polylines (meta[i]["index"] == i)
+        colors = [md["color"] if md["color"] in LINE_COLORS else "unknown" for md in meta]
+        styles = [md["style"] if md["style"] in LINE_STYLES else "unknown" for md in meta]
         if nL is None:
-            state = LaneState(currentLane=None, laneCount=None, laneBoundaries=polylines, confidence=0.0)
+            state = LaneState(currentLane=None, laneCount=None, laneBoundaries=polylines, confidence=0.0,
+                              boundaryColors=colors, boundaryStyles=styles)
         else:
             state = LaneState(currentLane=int(nL + 1), laneCount=int(nL + 1 + nR), laneBoundaries=polylines,
-                              confidence=round(float(conf), 3))
+                              confidence=round(float(conf), 3), boundaryColors=colors, boundaryStyles=styles)
         # road geometry (plan section 13)
         anchors, poly_src = [], []
         if ok:
@@ -299,7 +336,7 @@ class LaneDetector:
         road = RoadGeometry(drivableCoverage=round(float(drv_s.mean()), 4), egoPathPolygon=poly_src,
                             horizonY=round(y_h * sy, 1),
                             vanishingPoint=[round(vp[0] * sx, 1), round(vp[1] * sy, 1)] if vp else None,
-                            anchorPoints=anchors)
+                            anchorPoints=anchors, drivablePolygon=drivable_outline(drv_s, sx, sy))
         edges = st.get("edges_u", (None, None))
         extras = {
             "backend": self.backend_name,

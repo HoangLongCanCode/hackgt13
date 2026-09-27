@@ -50,8 +50,19 @@ internal fun worldLines(s: WorldSnapshot?, c: DrivingContext, nav: NavigationUpd
     val sb = StringBuilder()
     if (c.perceptionStale || s == null || s.perceptionStale) sb.append("  STALE  road alerts paused - navigation only\n")
     if (s != null && s.timing != null) {
+        // The layout numbers the lanes (guidance, lead); the server's own lane numbers are shown for comparison only.
+        val layout = s.laneLayout
+        sb.append("  lane   layout ")
+        sb.append(
+            if (layout != null) {
+                "${layout.egoLane}/${layout.laneCount} (q ${f2(layout.quality)}, age ${f2(layout.ageSeconds)}s" +
+                    (if (layout.stableAndFresh()) "" else ", NOT stable") + (if (layout.yellowLeftEdge) ", yellow left edge" else "") + ")"
+            } else {
+                "--"
+            },
+        )
         val lanes = s.lanes
-        sb.append("  lane   ")
+        sb.append("   server ")
         sb.append(if (lanes != null) "${lanes.currentLane ?: "?"}/${lanes.laneCount ?: "?"} (conf ${f2(lanes.lanes.confidence)}, age ${f2(lanes.ageSeconds)}s, ${lanes.lanes.laneBoundaries.size} lines)" else "--")
         s.road?.let { sb.append("   road coverage ${f2(it.road.drivableCoverage)}") }
         sb.append('\n')
@@ -99,7 +110,7 @@ internal fun worldLines(s: WorldSnapshot?, c: DrivingContext, nav: NavigationUpd
     if (nav != null) sb.append("  (#${nav.sequence}, age ${f1(nav.ageMs(nowNs) / 1000.0)} s${if (nav.stale) ", STALE" else ""})")
     sb.append('\n')
 
-    c.laneGuidance?.let { sb.append("  guide  ${it.text}  [${it.priority}]\n") }
+    c.laneGuidance?.let { sb.append("  guide  ${it.text}  lane ${it.currentLane ?: "?"}/${it.laneCount ?: "?"} -> ${it.targetLanes}  [${it.priority}]\n") }
     c.activeAlerts.firstOrNull()?.let { sb.append("  alert  ${DisplayText.shortLabel(it)}  (${it.text})  [${it.priority}]\n") }
 
     var e = events.poll()

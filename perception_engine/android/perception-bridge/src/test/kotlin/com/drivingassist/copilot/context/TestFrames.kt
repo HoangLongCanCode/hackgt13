@@ -47,5 +47,25 @@ object TestFrames {
             distanceMeters = distance, lateralMeters = 0.5, inEgoPath = inPath,
         )
 
+    /** The server's lane numbers without any line: no layout, so the lane is unknown to the Driving Context. */
     fun lanes(current: Int?, count: Int? = 3, confidence: Double = 0.8) = Lanes(current, count, emptyList(), confidence)
+
+    /**
+     * A layout of [count] lanes with the car in lane [ego], as the WorldModel publishes a stable one (lines through the
+     * horizon at the image centre of [frame]'s camera): for tests that are about the Driving Context, not the lines.
+     */
+    fun layout(ego: Int, count: Int = 3, quality: Double = 0.8, age: Double = 0.0) = LaneLayout(
+        vpX = 640.0, vpY = 360.0, lines = (0..count).map { LaneLine((it - ego + 0.5) * 2.0) }, egoLane = ego,
+        nearestRowY = 700.0, quality = quality, measuredPts = 0.0, ageSeconds = age,
+    )
+
+    /** A straight road seen by the camera of [frame]. */
+    val road = SyntheticRoad(focalPx = 1000.0, heightM = 1.4)
+
+    /**
+     * [count] lanes 3.5 m wide with the car [offset] m right of the middle of lane [current]: the line polylines the
+     * WorldModel lays out (stable from the third run), and the server's numbers for lane [current].
+     */
+    fun laneLines(current: Int, count: Int = 3, offset: Double = 0.0, confidence: Double = 0.8): Lanes =
+        road.lanes(*DoubleArray(count + 1) { (it - current + 0.5) * 3.5 - offset }, confidence = confidence).copy(currentLane = current, laneCount = count)
 }

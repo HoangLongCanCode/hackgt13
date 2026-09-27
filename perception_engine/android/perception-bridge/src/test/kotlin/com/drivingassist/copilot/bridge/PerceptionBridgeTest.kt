@@ -4,6 +4,7 @@ import com.drivingassist.copilot.context.LaneAction
 import com.drivingassist.copilot.context.LaneSide
 import com.drivingassist.copilot.context.Maneuver
 import com.drivingassist.copilot.context.NavigationState
+import com.drivingassist.copilot.context.SyntheticRoad
 import com.drivingassist.copilot.perception.Camera
 import com.drivingassist.copilot.perception.ClientCamera
 import com.drivingassist.copilot.perception.ClientDestination
@@ -146,13 +147,17 @@ class PerceptionBridgeTest {
 
     private val car = PerceivedObject(id = 7, cls = ObjectClass.CAR, bbox = listOf(430.0, 250.0, 540.0, 330.0), confidence = 0.9, ageFrames = 5, inEgoPath = true)
 
-    private fun frameJson(seq: Long, pts: Double, echo: Echo?, session: String) = PerceptionCodec.encode(
+    private fun frameJson(seq: Long, pts: Double, echo: Echo?, session: String, lanes: Lanes? = null) = PerceptionCodec.encode(
         PerceptionFrame(
             schemaVersion = 2, seq = seq, sessionId = session, source = Source(SourceKind.CAMERA, "tab-s9-01"), frameIndex = seq,
             ptsSeconds = pts, serverTimeMs = System.currentTimeMillis(), processingMs = 20.0, image = ImageSize(960, 540),
-            camera = Camera(745.2, listOf(480.0, 270.0)), objects = listOf(car), wave = 1, echo = echo,
+            camera = Camera(745.2, listOf(480.0, 270.0)), objects = listOf(car), lanes = lanes, wave = 1, echo = echo,
         ),
     )
+
+    /** The lines of three lanes 3.5 m wide seen from the middle of the left one, by the camera of [frameJson]. */
+    private val lane1of3 = SyntheticRoad(focalPx = 745.2, cx = 480.0, cy = 270.0, width = 960, height = 540)
+        .lanes(-1.75, 1.75, 5.25, 8.75).copy(currentLane = 1, laneCount = 3)
 
     private fun navJson(action: String, distance: Double, requiredLane: String? = null, pts: Double? = null) = PerceptionCodec.encode(
         NavigationPacketMessage(
@@ -303,7 +308,11 @@ class PerceptionBridgeTest {
         assertEquals(0L, w.wave2!!.seq)
         assertNotNull(w.timing!!.captureToResultMs)
         assertFalse(w.perceptionStale)
-        assertEquals(LaneAction.CHANGE_LANE_RIGHT, b.context.await { it.laneGuidance?.action == LaneAction.CHANGE_LANE_RIGHT }.laneGuidance!!.action)
+        // One lanes run without lines: no layout, so the lane is unknown (the server's lane 2 of 3 is not used).
+        val live = b.context.await { !it.perceptionStale && it.laneGuidance != null }.laneGuidance!!
+        assertEquals(LaneAction.UNKNOWN, live.action)
+        assertNull(live.currentLane)
+        assertTrue(live.text.startsWith("USE LANE 3"), live.text)
         val k = b.link.await { it.rttMs != null && it.captureToResultMsP50 != null }
         assertTrue(k.rttMs!! >= 0.0)
 
@@ -326,8 +335,9 @@ class PerceptionBridgeTest {
 
         // A replayed packet of a sim session (it carries media time) is not this live trip's route.
         ws.send(navJson("TURN_RIGHT", 28.0, pts = 12.3))
-        // Perception says lane 1 of 3; the route says: exit in 400 m from the rightmost lane.
-        ws.send(frameJson(0, 0.0, null, "live-nav").replace("\"objects\"", "\"lanes\":{\"currentLane\":1,\"laneCount\":3,\"laneBoundaries\":[],\"confidence\":0.8},\"objects\""))
+        // Perception sees lane 1 of 3 (three lanes runs: the layout of the lines is stable from the third); the route
+        // says: exit in 400 m from the rightmost lane.
+        for (seq in 0L..2L) ws.send(frameJson(seq, seq / 10.0, null, "live-nav", lanes = lane1of3))
         ws.send(navJson("EXIT_HIGHWAY", 400.0, requiredLane = "right"))
         val nav = b.navigation.await { it != null }!!
         assertEquals("EXIT_HIGHWAY", nav.routeState!!.action)

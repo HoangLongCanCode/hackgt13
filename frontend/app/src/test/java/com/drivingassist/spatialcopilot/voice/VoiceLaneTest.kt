@@ -3,6 +3,8 @@ package com.drivingassist.spatialcopilot.voice
 import com.drivingassist.copilot.context.DrivingContext
 import com.drivingassist.copilot.context.LaneAction
 import com.drivingassist.copilot.context.LaneGuidance
+import com.drivingassist.copilot.context.LaneLayout
+import com.drivingassist.copilot.context.LaneLine
 import com.drivingassist.copilot.context.LanesState
 import com.drivingassist.copilot.context.Maneuver
 import com.drivingassist.copilot.context.NavigationState
@@ -30,10 +32,20 @@ class VoiceLaneTest {
         offRoute = offRoute, speedMps = speed, provider = "mock", stale = stale, ptsSeconds = null, receivedAtNs = 0L, routeKey = "r1", eventKey = eventKey,
     )
 
-    private fun lanes(confidence: Double = 0.8, age: Double = 0.1, seen: Boolean = true) = LanesState(
-        lanes = Lanes(currentLane = 2, laneCount = 3, confidence = confidence,
-            laneBoundaries = if (seen) listOf(listOf(listOf(300.0, 540.0), listOf(460.0, 260.0)), listOf(listOf(700.0, 540.0), listOf(500.0, 260.0))) else emptyList()),
-        currentLane = 2, laneCount = 3, measuredPts = 0.0, ageSeconds = age,
+    /**
+     * Three lanes through a vanishing point right of the image center (a yawed phone), the car in lane 2: x = vpX
+     * lies between line 1 (slope -0.3) and line 2 (slope 1.6) below the vanishing point.
+     */
+    private fun layout(quality: Double = 0.8, age: Double = 0.1) = LaneLayout(
+        vpX = 780.0, vpY = 330.0, lines = listOf(LaneLine(-2.2), LaneLine(-0.3), LaneLine(1.6), LaneLine(3.4)),
+        egoLane = 2, nearestRowY = 700.0, quality = quality, measuredPts = 0.0, ageSeconds = age,
+    )
+
+    /** The lane model's own run as the server sends it in the city: lane 1 of 1 whatever the lines show. */
+    private fun serverLanes(confidence: Double) = LanesState(
+        lanes = Lanes(currentLane = 1, laneCount = 1, confidence = confidence,
+            laneBoundaries = listOf(listOf(listOf(300.0, 540.0), listOf(460.0, 260.0)), listOf(listOf(700.0, 540.0), listOf(500.0, 260.0)))),
+        currentLane = 1, laneCount = 1, measuredPts = 0.0, ageSeconds = 0.1,
     )
 
     /** What one step sees; null [route] = the run's route, null [targets] = the edge lane on the action's side. */
@@ -41,8 +53,9 @@ class VoiceLaneTest {
         val action: LaneAction? = LaneAction.CHANGE_LANE_RIGHT,
         val targets: List<Int>? = null,
         val current: Int = 2,
+        val layout: LaneLayout? = null,
+        val noLayout: Boolean = false,
         val lanes: LanesState? = null,
-        val noLanes: Boolean = false,
         val stale: Boolean = false,
         val inferred: Boolean = true,
         val route: RouteGuide? = null,
@@ -58,7 +71,7 @@ class VoiceLaneTest {
             navigation = NavigationState(Maneuver.TURN_RIGHT, d, laneHintInferred = s.inferred),
             perceptionStale = s.stale,
         ),
-        world = WorldSnapshot(lanes = if (s.noLanes) null else s.lanes ?: lanes()),
+        world = WorldSnapshot(lanes = s.lanes, laneLayout = if (s.noLayout) null else s.layout ?: layout()),
         linkConnected = true, takenOver = false, simPaused = false, hostVisible = true,
         route = s.route ?: r, routeDistanceMeters = d, live = false, gpsAccuracyMeters = null,
     )
@@ -85,8 +98,13 @@ class VoiceLaneTest {
             val spec = catalog[id]
             assertTrue(spec.enabledByDefault)
             assertEquals(Priority.UPCOMING_NAVIGATION, spec.priority)
-            assertEquals(1_500.0, spec.numbers["stableMs"])
-            assertEquals(0.6, spec.numbers["minConfidence"])
+            assertEquals(2_000.0, spec.numbers["evidenceWindowMs"])
+            assertEquals(0.7, spec.numbers["evidenceShare"])
+            assertEquals(500.0, spec.numbers["lastAskWithinMs"])
+            assertEquals(1_000.0, spec.numbers["revalidateWindowMs"])
+            assertEquals(null, spec.numbers["stableMs"])
+            assertEquals(0.5, spec.numbers["minLayoutQuality"])
+            assertEquals(null, spec.numbers["minConfidence"])
             assertEquals(1.0, spec.numbers["maxAgeSeconds"])
             assertEquals(3_000L, spec.ttlMs)
             assertEquals(true, spec.flags["allowInferredLaneSide"])
@@ -100,11 +118,11 @@ class VoiceLaneTest {
     }
 
     @Test
-    fun `fires once after the stable time on fresh confident lanes`() {
+    fun `fires once on a full evidence window on a fresh lane layout of good quality`() {
         val p = CuePolicy(catalog)
         // Up to 7 s (182 m): the cue still has room before the immediate prompt, so it stays valid.
         val cue = run(p, 0, 7_000).single()
-        // Perception warms up for 500 ms, then the request holds for 1,500 ms.
+        // The 2 s window is full at 2 s; the 500 ms of perception warm-up count as not asking: 31 of 40 steps ask.
         assertEquals(2_000L, cue.createdMs)
         assertEquals("Move to the right lane for the turn, check for cars.", cue.text)
         assertEquals(Priority.UPCOMING_NAVIGATION, cue.priority)
@@ -125,12 +143,13 @@ class VoiceLaneTest {
     }
 
     @Test
-    fun `silent on weak, old or empty lanes, stale perception, off route, or once the immediate prompt is due`() {
+    fun `silent on a weak, old or missing lane layout, stale perception, off route, or once the immediate prompt is due`() {
         val cases = mapOf<String, Step>(
-            "confidence below 0.6" to Step(lanes = lanes(confidence = 0.55)),
-            "lanes older than 1 s" to Step(lanes = lanes(age = 1.2)),
-            "no lines seen on the run" to Step(lanes = lanes(seen = false)),
-            "no lanes block" to Step(noLanes = true),
+            "layout quality below 0.5" to Step(layout = layout(quality = 0.45)),
+            "layout older than 1 s" to Step(layout = layout(age = 1.2)),
+            "layout not stable (the bridge's hysteresis)" to Step(layout = layout().copy(stable = false)),
+            "no layout" to Step(noLayout = true),
+            "no layout, confident server lanes" to Step(noLayout = true, lanes = serverLanes(confidence = 0.9)),
             "stale perception" to Step(stale = true),
             "off route" to Step(route = route(offRoute = true)),
             "stale route" to Step(route = route(stale = true)),
@@ -145,14 +164,70 @@ class VoiceLaneTest {
     }
 
     @Test
-    fun `any violation or a side change restarts the stable time`() {
-        // One weak frame at 1.5 s: 1,500 ms more from 1.55 s.
-        val weak = run(CuePolicy(catalog), 0, 6_000) { t -> if (t == 1_500L) Step(lanes = lanes(confidence = 0.3)) else Step() }
-        assertEquals(3_050L, weak.single().createdMs)
-        // Left until 1.5 s, then right: the right cue waits its own 1,500 ms and the left one never fires.
+    fun `the lane model's own confidence and lane numbers do not gate the cue`() {
+        // City recording: the server says lane 1 of 1 at confidence 0.3 while the fitted layout is good.
+        val cue = run(CuePolicy(catalog), 0, 6_000) { Step(lanes = serverLanes(confidence = 0.3)) }.single()
+        assertEquals(2_000L, cue.createdMs)
+        assertEquals(CuePolicy.LANE_RIGHT, cue.cueId)
+        // Exactly at the catalog minimum.
+        assertEquals(1, run(CuePolicy(catalog), 0, 6_000) { Step(layout = layout(quality = 0.5)) }.size)
+        // A stricter catalog number is read, not a constant.
+        val strict = CueCatalog.parse(json.replace("\"minLayoutQuality\": 0.5", "\"minLayoutQuality\": 0.9"))
+        assertTrue(run(CuePolicy(strict), 0, 6_000).isEmpty())
+    }
+
+    @Test
+    fun `one weak step does not delay the cue, a side change needs its own share`() {
+        val weak = run(CuePolicy(catalog), 0, 6_000) { t -> if (t == 1_500L) Step(layout = layout(quality = 0.3)) else Step() }
+        assertEquals(2_000L, weak.single().createdMs)
+        // Left until 1.5 s, then right: the right side reaches 28 of the 40 steps at 2.85 s; the left one never has 70 %.
         val flip = run(CuePolicy(catalog), 0, 6_000) { t -> Step(action = if (t < 1_500L) LaneAction.CHANGE_LANE_LEFT else LaneAction.CHANGE_LANE_RIGHT) }
         assertEquals(CuePolicy.LANE_RIGHT, flip.single().cueId)
-        assertEquals(3_000L, flip.single().createdMs)
+        assertEquals(2_850L, flip.single().createdMs)
+    }
+
+    @Test
+    fun `a flickering wrong-lane guidance fires, a single short blip does not`() {
+        // Replay of a real drive (segment 011): the left lane drops out behind the A-pillar for 250 ms every second, so the
+        // guidance flips to KEEP_LANE (the car looks like it is in the leftmost visible lane). No run reaches 1.5 s, but
+        // 75 % of the steps ask for the left lane.
+        fun flicker(t: Long) = t % 1_000 < 750
+        val left = route(Maneuver.TURN_LEFT)
+        val cue = run(CuePolicy(catalog), 0, 8_000, r = left) { t ->
+            Step(action = if (flicker(t)) LaneAction.CHANGE_LANE_LEFT else LaneAction.KEEP_LANE)
+        }.single()
+        assertEquals("Move to the left lane for the turn, check for cars.", cue.text)
+        assertEquals(2_350L, cue.createdMs)
+        // The same with the layout unstable whenever the lane is hidden: 75 % stable is enough too.
+        assertEquals(1, run(CuePolicy(catalog), 0, 8_000, r = left) { t ->
+            if (flicker(t)) Step(action = LaneAction.CHANGE_LANE_LEFT) else Step(action = LaneAction.KEEP_LANE, layout = layout().copy(stable = false))
+        }.size)
+        // A layout unstable in 40 % of the steps is not enough, even when every step asks.
+        assertTrue(run(CuePolicy(catalog), 0, 8_000, r = left) { t ->
+            Step(action = LaneAction.CHANGE_LANE_LEFT, layout = if (t % 1_000 < 600) layout() else layout().copy(stable = false))
+        }.isEmpty())
+        // A single blip of 1 s (20 of 40 steps) or 300 ms never reaches 70 %.
+        for (blip in listOf(1_000L until 2_000L, 3_000L until 3_300L)) {
+            assertTrue("blip $blip", run(CuePolicy(catalog), 0, 8_000, r = left) { t ->
+                Step(action = if (t in blip) LaneAction.CHANGE_LANE_LEFT else LaneAction.KEEP_LANE)
+            }.isEmpty())
+        }
+    }
+
+    @Test
+    fun `the side must have been asked for within the last 500 ms`() {
+        // The side asked for 3 s while the route was stale (the evidence counts, the current step's route gate blocks).
+        fun staleUntil3s(t: Long, after: LaneAction) =
+            if (t <= 3_000L) Step(route = route(stale = true)) else Step(action = after)
+        assertEquals(3_050L, run(CuePolicy(catalog), 0, 6_000) { t -> staleUntil3s(t, LaneAction.CHANGE_LANE_RIGHT) }.single().createdMs)
+        // Stale until 3.55 s, KEEP_LANE from 3.05 s: at 3.6 s 70 % of the window asked, but the last ask is 600 ms old.
+        assertTrue(run(CuePolicy(catalog), 0, 6_000) { t ->
+            when {
+                t <= 3_000L -> Step(route = route(stale = true))
+                t <= 3_550L -> Step(action = LaneAction.KEEP_LANE, route = route(stale = true))
+                else -> Step(action = LaneAction.KEEP_LANE)
+            }
+        }.isEmpty())
     }
 
     @Test
@@ -173,32 +248,48 @@ class VoiceLaneTest {
         val again = run(p, 2_050, 2_100, d0 = 280.0 - SPEED * 2.05)
         assertEquals(first.key, again.single().key)
         assertTrue("played: no repeat", run(p, 2_150, 6_000, d0 = 280.0 - SPEED * 2.15).isEmpty())
-        // The next maneuver (new event key) is a new cue, after its own stable time.
+        // The next maneuver (new event key) is a new cue, after a full window of its own.
         val next = run(p, 6_050, 9_000, d0 = 900.0, r = route(eventKey = "r1/step_4"))
-        assertEquals(7_550L, next.single().createdMs)
+        assertEquals(8_050L, next.single().createdMs)
     }
 
     @Test
     fun `a queued cue is no longer valid once the lane is reached or the immediate prompt is due`() {
         val p = CuePolicy(catalog)
         val cue = run(p, 0, 2_000).single()
-        run(p, 2_050, 2_100, d0 = 250.0) { Step(action = LaneAction.KEEP_LANE) }
-        assertFalse(p.stillValid(cue))
-        run(p, 2_150, 2_200, d0 = 250.0)
+        // In the lane for 250 ms (a flicker): the side still has most of the last second.
+        run(p, 2_050, 2_250, d0 = 250.0) { Step(action = LaneAction.KEEP_LANE) }
         assertTrue(p.stillValid(cue))
-        run(p, 2_250, 2_300, d0 = 90.0)
+        // In the lane for 500 ms: half of the last second, not more.
+        run(p, 2_300, 2_500, d0 = 247.0) { Step(action = LaneAction.KEEP_LANE) }
+        assertFalse(p.stillValid(cue))
+        run(p, 2_550, 3_050, d0 = 244.0)
+        assertTrue(p.stillValid(cue))
+        run(p, 3_100, 3_150, d0 = 90.0)
         assertFalse("inside I(v)", p.stillValid(cue))
         assertTrue("other cues are not re-validated here", p.stillValid(cue.copy(cueId = CuePolicy.PREPARE)))
     }
 
     @Test
-    fun `a queued cue survives a short lane-quality dip, not a long one`() {
+    fun `a queued cue survives a short dip of the guidance to UNKNOWN, not a long one or a new event key`() {
+        // The engine drops the lane numbers (action UNKNOWN) once the held layout is older than 1 s.
+        val dip = Step(action = LaneAction.UNKNOWN, layout = layout(age = 1.2))
         val p = CuePolicy(catalog)
         val cue = run(p, 0, 2_000).single()
-        run(p, 2_050, 2_300, d0 = 250.0) { Step(lanes = lanes(confidence = 0.55)) }
-        assertTrue("0.3 s of weak lanes", p.stillValid(cue))
-        run(p, 2_350, 2_600, d0 = 246.0) { Step(lanes = lanes(confidence = 0.55)) }
-        assertFalse("0.6 s of weak lanes", p.stillValid(cue))
+        run(p, 2_050, 2_350, d0 = 250.0) { dip }
+        assertTrue("0.35 s of UNKNOWN", p.stillValid(cue))
+        run(p, 2_400, 2_600, d0 = 245.0) { dip }
+        assertFalse("0.6 s of UNKNOWN", p.stillValid(cue))
+        // A weak layout while the guidance still asks: the side is what is re-validated.
+        val q = CuePolicy(catalog)
+        val queued = run(q, 0, 2_000).single()
+        run(q, 2_050, 2_600, d0 = 250.0) { Step(layout = layout(quality = 0.45)) }
+        assertTrue(q.stillValid(queued))
+        // A new event key during the dip: no longer the same cue.
+        val k = CuePolicy(catalog)
+        val old = run(k, 0, 2_000).single()
+        run(k, 2_050, 2_150, d0 = 250.0, r = route(eventKey = "r1/step_4")) { dip }
+        assertFalse(k.stillValid(old))
     }
 
     @Test

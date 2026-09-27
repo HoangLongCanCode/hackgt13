@@ -5,6 +5,7 @@ import com.drivingassist.copilot.context.FollowingInfo
 import com.drivingassist.copilot.context.FollowingState
 import com.drivingassist.copilot.context.LaneAction
 import com.drivingassist.copilot.context.LaneGuidance
+import com.drivingassist.copilot.context.LaneLayout
 import com.drivingassist.copilot.context.Maneuver
 import com.drivingassist.copilot.context.Priority
 import com.drivingassist.copilot.context.WorldSnapshot
@@ -29,6 +30,11 @@ data class PolicyInput(
     val routeDistanceMeters: Double?,
     val live: Boolean,
     val gpsAccuracyMeters: Double?,
+    /**
+     * The Driving Context's speed gate (`DrivingContextConfig.criticalMinEgoSpeedMps`, set by the settings switch),
+     * null = off. Below it (route speed known) the car counts as stopped: no pedestrian cue.
+     */
+    val speedGateMps: Double? = null,
 )
 
 /** A request for one presentation. [key] = (cue, scope): the arbiter dedupes and replaces by it. */
@@ -58,11 +64,16 @@ data class CueRequest(
  * earcon alone. (The spec also allows a repeat on escalation inside an episode; this build does not, so a
  * warning never repeats while TOO CLOSE holds.)
  *
- * Lane change: `lane.change_left` / `lane.change_right` once per (event key, side) when the Driving
- * Context has asked for that side for `stableMs` on fresh, confident lanes that saw lines, with room to say it
- * before the immediate prompt is due ("Move to the right lane for the exit, check for cars.": the driver is
- * asked to look; the lane is never called free). A middle target lane says the side only ("Move right ...").
- * At most `maxPresentationsPerEventKey` presentations per event key; the lane cue is the one left out.
+ * Lane change: `lane.change_left` / `lane.change_right` once per (event key, side) on evidence over a sliding
+ * `evidenceWindowMs` of steps: the Driving Context asked for that side in `evidenceShare` of them, the lane layout
+ * was stable and good in as many, and the side was asked within `lastAskWithinMs`; with room to say it before the
+ * immediate prompt is due ("Move to the right lane for the exit, check for cars.": the driver is asked to look;
+ * the lane is never called free). A share, not a continuous run: a layout that loses a lane behind the A-pillar
+ * now and then must not keep the cue silent. A middle target lane says the side only ("Move right ..."). At most
+ * `maxPresentationsPerEventKey` presentations per event key; the lane cue is the one left out.
+ *
+ * Pedestrians: no cue while the car is stopped ([PolicyInput.speedGateMps] set and the route speed below it), as
+ * the Driving Context holds TOO CLOSE back then; an unknown speed never holds them.
  *
  * Implemented cues: safety.vehicle_too_close, safety.pedestrian_critical, alert.pedestrian,
  * alert.red_light, info.road_alerts_paused / back, nav.start, nav.continue, nav.prepare, nav.immediate,
@@ -111,14 +122,18 @@ class CuePolicy(private val catalog: CueCatalog) {
     private var eventSeenMs = 0L
 
     // --- lane change --------------------------------------------------------------------------------
-    private var laneSince: Long? = null
-    /** (cue, event key) the stable time is running for. */
-    private var laneTimerKey: String? = null
+    /** One step of lane evidence: the side asked for (null: none, or the PERCEPTION gates were closed) and the layout. */
+    private class LaneSample(val t: Long, val side: String?, val layoutStable: Boolean, val quality: Double, val ageSeconds: Double)
+    private val laneSamples = ArrayDeque<LaneSample>()
+    /** Event key the evidence is collected for, and its first step (a new event key or a gap in the steps starts over). */
+    private var laneEvidenceKey: String? = null
+    private var laneEvidenceSince = 0L
+    /** The last guidance that asked for each side: its target lanes pick the phrase while the guidance flickers. */
+    private val laneAsk = HashMap<String, LaneGuidance>()
     private val laneSpoken = HashSet<String>()
 
-    /** Key of the lane cue whose condition (all but the stable time) held on the last step, and when it last held. */
-    private var laneValidKey: String? = null
-    private var laneValidMs = 0L
+    /** Keys (cue / event key) whose every condition but the evidence held on the last step. */
+    private val laneHeld = HashSet<String>()
     private var stepMs = 0L
 
     /** The lane cue's inputs on the last step, for the voice log when a queued lane cue is dropped. */
@@ -156,12 +171,18 @@ class CuePolicy(private val catalog: CueCatalog) {
     }
 
     /**
-     * Re-validation of a queued [r] before it starts, on the last step's state: a lane cue needs the same
-     * side and event key to still hold every condition but the stable time (lane quality may have dipped for at
-     * most [LANE_QUALITY_GRACE_MS]). Other cues: true.
+     * Re-validation of a queued [r] before it starts, on the last step's state: a lane cue needs the same event key,
+     * every condition but the evidence (gates, route, room before the immediate prompt), and its side asked for in
+     * more than half of the steps of the last `revalidateWindowMs`, so a short KEEP_LANE or UNKNOWN flicker (the
+     * layout too old for lane numbers for a moment) does not drop it, but the car settled in the lane does. Other
+     * cues: true.
      */
-    fun stillValid(r: CueRequest): Boolean =
-        if (r.cueId == LANE_LEFT || r.cueId == LANE_RIGHT) r.key == laneValidKey && stepMs - laneValidMs <= LANE_QUALITY_GRACE_MS else true
+    fun stillValid(r: CueRequest): Boolean {
+        if (r.cueId != LANE_LEFT && r.cueId != LANE_RIGHT) return true
+        val windowMs = catalog[r.cueId].numbers["revalidateWindowMs"] ?: 1_000.0
+        val recent = laneSamples.filter { stepMs - it.t < windowMs }
+        return r.key in laneHeld && recent.count { it.side == r.cueId } * 2 > recent.size
+    }
 
     // ------------------------------------------------------------------------------------------------
 
@@ -195,6 +216,12 @@ class CuePolicy(private val catalog: CueCatalog) {
         return byDistance || byTtc
     }
 
+    /**
+     * `alert.pedestrian` / `safety.pedestrian_critical` (one shared episode). Not while stopped: with the speed gate on
+     * and the route speed known and below it (people crossing in front of a car waiting at a light), no cue is created;
+     * the episode goes on meanwhile, so driving off with the same pedestrian in the path does not repeat an alert
+     * already spoken. Moving, or with an unknown speed, as before.
+     */
     private fun pedestrians(input: PolicyInput, gates: Boolean, out: MutableList<CueRequest>) {
         val now = input.nowMs
         val nearest = input.context.pedestriansInPath.firstOrNull()
@@ -208,6 +235,7 @@ class CuePolicy(private val catalog: CueCatalog) {
             return
         }
         pedLastTrue = now
+        if (stopped(input)) { pedSince = null; return }
         if (pedSince == null) pedSince = now
         if (now - pedSince!! < critSpec.persistenceMs) return
         val critical = (nearest.distanceMeters?.let { it <= 12.0 } == true) || (nearest.ttcSeconds?.let { it <= 3.0 } == true)
@@ -221,6 +249,13 @@ class CuePolicy(private val catalog: CueCatalog) {
             pedAlertCount++
             out += request(alertSpec, alertSpec.text, "$PED_ALERT#$now", now)
         }
+    }
+
+    /** The speed gate is on and the route speed is known and below it (the Driving Context holds CRITICAL back then too). */
+    private fun stopped(input: PolicyInput): Boolean {
+        val gate = input.speedGateMps ?: return false
+        val v = input.context.navigation?.egoSpeedMps ?: return false
+        return v < gate
     }
 
     private fun redLight(input: PolicyInput, gates: Boolean, out: MutableList<CueRequest>) {
@@ -348,39 +383,59 @@ class CuePolicy(private val catalog: CueCatalog) {
     }
 
     private fun laneChange(input: PolicyInput, gates: Boolean, out: MutableList<CueRequest>) {
+        val now = input.nowMs
         val g = input.context.laneGuidance
-        val id = when (g?.action) {
+        val r = input.route
+        val asked = when (g?.action) {
             LaneAction.CHANGE_LANE_LEFT -> LANE_LEFT
             LaneAction.CHANGE_LANE_RIGHT -> LANE_RIGHT
             else -> null
+        }?.takeIf { gates }
+        // A new event key, or a gap in the steps (the window would cover time nobody sampled), starts the evidence over.
+        if (r?.eventKey != laneEvidenceKey || laneSamples.lastOrNull()?.let { now - it.t > LANE_MAX_STEP_GAP_MS } == true) {
+            laneSamples.clear()
+            laneAsk.clear()
+            laneEvidenceKey = r?.eventKey
+            laneEvidenceSince = now
         }
-        val r = input.route
-        val spec = id?.let { catalog[it] }
-        val text = if (spec != null && r != null && g != null) laneText(spec, r, g, input.context.navigation?.laneHintInferred == true) else null
+        if (asked != null) laneAsk[asked] = g!!
+        val layout = input.world.laneLayout
+        laneSamples.addLast(LaneSample(
+            now, asked, layout?.let { it.stable && it.ageSeconds <= LaneLayout.MAX_USABLE_AGE_SECONDS } == true,
+            layout?.quality ?: 0.0, layout?.ageSeconds ?: Double.MAX_VALUE,
+        ))
+        val keepMs = LANE_SIDES.maxOf { max(catalog[it].numbers["evidenceWindowMs"] ?: 2_000.0, catalog[it].numbers["revalidateWindowMs"] ?: 1_000.0) }
+        while (now - laneSamples.first().t >= keepMs) laneSamples.removeFirst()
+        laneHeld.clear()
+        val inferred = input.context.navigation?.laneHintInferred == true
+        val shares = StringBuilder()
+        for (id in LANE_SIDES) {
+            val spec = catalog[id]
+            val n = spec.numbers
+            val windowMs = n["evidenceWindowMs"] ?: 2_000.0
+            val window = laneSamples.filter { now - it.t < windowMs }
+            val askShare = window.count { it.side == id }.toDouble() / window.size
+            val layoutShare = window.count { layoutOk(it, spec) }.toDouble() / window.size
+            shares.append(" ${if (id == LANE_LEFT) "L" else "R"} ask ${"%.2f".format(askShare)} layout ${"%.2f".format(layoutShare)}")
+            if (r == null) continue
+            val text = laneAsk[id]?.let { laneText(spec, r, it, inferred) } ?: continue
+            if (!laneHolds(input, gates, spec, r, text)) continue
+            val key = "${spec.id}/${r.eventKey}"
+            laneHeld += key
+            // The evidence: a full window, both shares, and the side asked for lately (not only long ago).
+            val share = (n["evidenceShare"] ?: 0.7) - 1e-9
+            val lastAsk = window.lastOrNull { it.side == id }?.t ?: continue
+            if (now - laneEvidenceSince < windowMs || askShare < share || layoutShare < share || now - lastAsk > (n["lastAskWithinMs"] ?: 500.0)) continue
+            if (key in laneSpoken || !laneFits(r, input.routeDistanceMeters!!)) continue
+            laneSpoken += key
+            out += request(spec, text, key, now, r.eventKey)
+        }
         laneState = "action ${g?.action} gates $gates d ${input.routeDistanceMeters?.toInt()} v ${r?.let { navSpeed(it).toInt() }} " +
-            "conf ${input.world.lanes?.lanes?.confidence} lines ${input.world.lanes?.lanes?.laneBoundaries?.size} key ${r?.eventKey}"
-        if (spec == null || r == null || text == null || !laneHolds(input, gates, spec, r, text)) { laneSince = null; laneValidKey = null; return }
-        val now = input.nowMs
-        val key = "${spec.id}/${r.eventKey}"
-        if (!laneQuality(input, spec)) {
-            // A lane-quality dip (confidence, age, a run without lines) restarts the stable time, but a queued cue of
-            // the same side and event key stays valid for LANE_QUALITY_GRACE_MS: one weak run must not discard it.
-            laneSince = null
-            if (laneValidKey != key) laneValidKey = null
-            return
-        }
-        // Any violation (above), a side change or a new event key restarts the stable time.
-        if (laneSince == null || laneTimerKey != key) { laneSince = now; laneTimerKey = key }
-        laneValidKey = key
-        laneValidMs = now
-        if (now - laneSince!! < (spec.numbers["stableMs"] ?: 1_500.0)) return
-        if (key in laneSpoken || !laneFits(r, input.routeDistanceMeters!!)) return
-        laneSpoken += key
-        out += request(spec, text, key, now, r.eventKey)
+            "layout ${layout?.let { "q ${it.quality} age ${it.ageSeconds} stable ${it.stable} lane ${it.egoLane}/${it.laneCount}" }}$shares key ${r?.eventKey}"
     }
 
     /**
-     * Every lane-cue condition but the stable time and the lane quality (AUDIO_CUE_RULES.md 6.5): the PERCEPTION
+     * Every lane-cue condition on the current step but the evidence (AUDIO_CUE_RULES.md 6.5): the PERCEPTION
      * gates, a route that is neither stale nor off route, an inferred side only when the catalog allows it, and a
      * known distance with room to say [text] before the immediate prompt is due: `d - I(v) >= v x (its duration +
      * 1 s)`, the same margin as nav.prepare at bind (7.3 item 6).
@@ -393,13 +448,14 @@ class CuePolicy(private val catalog: CueCatalog) {
             d - immediateMeters(v) >= v * (spokenSeconds(text) + 1.0)
     }
 
-    /** The lane model's run is usable for the cue: it saw lines, is fresh and confident (6.5). */
-    private fun laneQuality(input: PolicyInput, spec: CueSpec): Boolean {
-        val n = spec.numbers
-        val lanes = input.world.lanes ?: return false
-        return lanes.lanes.laneBoundaries.isNotEmpty() && lanes.ageSeconds <= (n["maxAgeSeconds"] ?: 1.0) &&
-            lanes.lanes.confidence >= (n["minConfidence"] ?: 0.6)
-    }
+    /**
+     * The step's lane layout (built from the detected lines) counts as evidence: present, stable (the bridge's
+     * hysteresis), at most `maxAgeSeconds` and [LaneLayout.MAX_USABLE_AGE_SECONDS] old, of quality at least
+     * `minLayoutQuality` (6.5). The lane model's own confidence is not used: it stays at 0.2-0.4 in the city while
+     * the lines themselves are good.
+     */
+    private fun layoutOk(s: LaneSample, spec: CueSpec): Boolean =
+        s.layoutStable && s.ageSeconds <= (spec.numbers["maxAgeSeconds"] ?: 1.0) && s.quality >= (spec.numbers["minLayoutQuality"] ?: 0.5)
 
     /**
      * At most `maxPresentationsPerEventKey` (3) per event key, the lane cue dropped first (6.5): the stages and lane
@@ -491,13 +547,14 @@ class CuePolicy(private val catalog: CueCatalog) {
         const val IMMEDIATE = "nav.immediate"
         const val LANE_LEFT = "lane.change_left"
         const val LANE_RIGHT = "lane.change_right"
+        private val LANE_SIDES = listOf(LANE_LEFT, LANE_RIGHT)
         /** The per-event-key nav stages ([once] keys `<eventKey>:<stage>`; nav.arrive_prepare uses `prepare`). */
         val NAV_STAGES = listOf("continue", "prepare", "immediate", "arrived")
         const val WARMUP_MS = 500L
         const val WINDOW_MS = 3_000L
         const val STALE_MS = 2_500L
         const val SETTLE_MS = 500L
-        /** A queued lane cue survives a lane-quality dip this long (lane confidence on real clips hovers around 0.6). */
-        const val LANE_QUALITY_GRACE_MS = 500L
+        /** Steps further apart than this (the voice loop was not running) start the lane evidence over. */
+        const val LANE_MAX_STEP_GAP_MS = 500L
     }
 }

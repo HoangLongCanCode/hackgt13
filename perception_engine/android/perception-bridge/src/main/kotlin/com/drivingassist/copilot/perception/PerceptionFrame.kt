@@ -176,6 +176,13 @@ data class Lanes(
     /** Left-to-right polylines; each point is [x, y] px, <= 20 points each. */
     val laneBoundaries: List<List<List<Double>>> = emptyList(),
     val confidence: Double,
+    /**
+     * v2 (optional): paint colour of each polyline, parallel to [laneBoundaries] (index i describes laneBoundaries[i]):
+     * "yellow" | "white" | "unknown". Null when the server has no per-line metadata.
+     */
+    val boundaryColors: List<String>? = null,
+    /** v2 (optional): "solid" | "dashed" | "unknown" per polyline, parallel to [laneBoundaries] like [boundaryColors]. */
+    val boundaryStyles: List<String>? = null,
 )
 
 /** Plan §13: where AR content can be anchored. */
@@ -188,6 +195,11 @@ data class Road(
     /** [x, y] px */
     val vanishingPoint: List<Double>? = null,
     val anchorPoints: List<AnchorPoint> = emptyList(),
+    /**
+     * Outline of the visible drivable road, each [x, y] px (simplified, at most 32 points); empty when unknown.
+     * Excludes the dashboard, hood and pillars, so AR content is kept inside it.
+     */
+    val drivablePolygon: List<List<Double>> = emptyList(),
 ) {
     fun anchor(name: String): AnchorPoint? = anchorPoints.firstOrNull { it.name == name }
 }

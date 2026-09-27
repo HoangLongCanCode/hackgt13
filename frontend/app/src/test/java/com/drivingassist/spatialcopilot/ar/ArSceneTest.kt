@@ -6,8 +6,11 @@ import com.drivingassist.copilot.context.FollowingInfo
 import com.drivingassist.copilot.context.FollowingState
 import com.drivingassist.copilot.context.LaneAction
 import com.drivingassist.copilot.context.LaneGuidance
+import com.drivingassist.copilot.context.LaneLayout
+import com.drivingassist.copilot.context.LaneLine
 import com.drivingassist.copilot.context.Maneuver
 import com.drivingassist.copilot.context.Priority
+import com.drivingassist.copilot.context.WorldSnapshot
 import com.drivingassist.copilot.perception.NavigationPacketMessage
 import com.drivingassist.copilot.perception.PerceptionCodec
 import com.drivingassist.spatialcopilot.nav.DemoDrive
@@ -74,8 +77,14 @@ class ArSceneTest {
         assertEquals(-3.5, lanePath.last().x, 1e-6)
     }
 
-    private fun input(state: FollowingState, distance: Double?, route: RouteGuide? = null, debug: Boolean = false) = ArInput(
-        world = DemoDrive.world(10.0, 150),
+    private fun input(
+        state: FollowingState,
+        distance: Double?,
+        route: RouteGuide? = null,
+        debug: Boolean = false,
+        world: WorldSnapshot = DemoDrive.world(10.0, 150),
+    ) = ArInput(
+        world = world,
         context = DrivingContext(following = FollowingInfo(state = state, leadTrackId = 7, distanceMeters = distance)),
         route = route,
         routeDistanceMeters = route?.distanceMeters,
@@ -121,17 +130,29 @@ class ArSceneTest {
     }
 
     @Test
-    fun `clean view draws the lane arrow, no chevrons, no ribbon`() {
-        val b = ArSceneBuilder()
+    fun `clean view draws the lane arrows, no chevrons, no ribbon`() {
         val r = route(Maneuver.TURN_RIGHT, "right")
-        var t = 1_000_000_000L
-        var scene = b.build(input(FollowingState.NORMAL, 25.0, r), 2560f, 1600f, t)
-        repeat(30) { t += 16_000_000L; scene = b.build(input(FollowingState.NORMAL, 25.0, r), 2560f, 1600f, t) }
-        assertTrue(scene.chevrons.isEmpty())
-        assertTrue(scene.ribbon.isEmpty())
-        assertNull(scene.debug)
-        // No lane guidance: the ego lane's arrow alone, green, shaped for the turn 30 m ahead.
-        val a = scene.laneArrows.single()
+        fun scene(world: WorldSnapshot): ArScene {
+            val b = ArSceneBuilder()
+            var t = 1_000_000_000L
+            var scene = b.build(input(FollowingState.NORMAL, 25.0, r, world = world), 2560f, 1600f, t)
+            repeat(30) { t += 16_000_000L; scene = b.build(input(FollowingState.NORMAL, 25.0, r, world = world), 2560f, 1600f, t) }
+            return scene
+        }
+        // Three lanes through the DEMO picture's vanishing point, the car in lane 2.
+        val layout = LaneLayout(480.0, 250.0, listOf(LaneLine(-3.9), LaneLine(-1.3), LaneLine(1.3), LaneLine(3.9)), 2, 530.0, 0.9, 10.0)
+        val lanes = scene(DemoDrive.world(10.0, 150).copy(laneLayout = layout))
+        assertTrue(lanes.chevrons.isEmpty())
+        assertTrue(lanes.ribbon.isEmpty())
+        assertNull(lanes.debug)
+        // No lane guidance: an arrow in every lane, the car's lane green and shaped for the turn 30 m ahead.
+        assertEquals(listOf(1, 2, 3), lanes.laneArrows.map { it.lane }.sortedBy { it })
+        val own = lanes.laneArrows.single { it.lane == 2 }
+        assertEquals(LaneArrowStyle.TARGET, own.style)
+        assertEquals(LaneArrowGlyph.TURN_RIGHT, own.glyph)
+        assertTrue(lanes.laneArrows.filter { it.lane != 2 }.all { it.style == LaneArrowStyle.OTHER && it.glyph == LaneArrowGlyph.STRAIGHT })
+        // No layout: the car's lane arrow alone.
+        val a = scene(DemoDrive.world(10.0, 150).copy(laneLayout = null)).laneArrows.single()
         assertNull(a.lane)
         assertEquals(LaneArrowStyle.TARGET, a.style)
         assertEquals(LaneArrowGlyph.TURN_RIGHT, a.glyph)

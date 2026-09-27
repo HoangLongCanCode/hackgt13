@@ -7,6 +7,17 @@ import kotlin.math.max
 import kotlin.math.sin
 import kotlin.math.tan
 
+/**
+ * Image column of the road's vanishing point: the server's `road.vanishingPoint` (fresh), else the lane layout's;
+ * null when neither lies inside the image.
+ */
+fun roadVanishingX(world: WorldSnapshot): Double? {
+    val width = world.image?.width?.toDouble() ?: return null
+    val road = world.road?.takeIf { it.ageSeconds <= EgoLane.MAX_LANES_AGE_S }?.road?.vanishingPoint?.takeIf { it.size >= 2 }?.get(0)
+    val layout = world.laneLayout?.takeIf { it.ageSeconds <= EgoLane.MAX_LANES_AGE_S }?.vpX
+    return listOfNotNull(road, layout).firstOrNull { it in 0.0..width }
+}
+
 /** A point in image or view pixels (x right, y down). */
 data class Vec2(val x: Float, val y: Float)
 
@@ -97,12 +108,19 @@ class GroundProjector(
     /** Road point under image pixel ([u], [v]); null above the horizon. */
     fun toGround(u: Double, v: Double): Ground? = forwardAtRow(v)?.let { z -> Ground(lateralAt(u, z), z) }
 
+    /**
+     * Heading dx/dz on the road (x right, z ahead) of the direction whose vanishing point is at image column
+     * [vpX]: `(vpX - cx) cos(pitch) / f`. A yawed phone sees the road's vanishing point off the principal point.
+     */
+    fun headingAt(vpX: Double): Double = (vpX - cx) * cosP / focalPx
+
     /** Nearest road distance inside the picture (bottom row). */
     val nearestVisibleZ: Double get() = forwardAtRow(imageHeight.toDouble()) ?: MIN_Z
 
     companion object {
         const val MIN_Z = 1.0
         const val DEFAULT_CAMERA_HEIGHT_M = 1.25
+        val PLAUSIBLE_CAMERA_HEIGHT_M = 1.0..2.0
 
         /** From a snapshot; null without camera intrinsics or image size (nothing to anchor to). */
         fun from(world: WorldSnapshot): GroundProjector? {
@@ -112,8 +130,19 @@ class GroundProjector(
             // Same precedence as the server's groundXZ: road horizon, then camera horizon.
             val horizon = world.road?.road?.horizonY ?: cam.horizonY ?: cam.cy
             if (horizon >= image.height - 4) return null
-            val height = cam.cameraHeightMeters?.takeIf { it > 0.2 } ?: DEFAULT_CAMERA_HEIGHT_M
-            return GroundProjector(cam.focalPx, cam.cx, cam.cy, horizon, height, image.width, image.height)
+            return GroundProjector(cam.focalPx, cam.cx, cam.cy, horizon, heightOf(world), image.width, image.height)
+        }
+
+        /**
+         * Camera height the arrows are drawn with: the one the bridge measured the lane layout's widths with (smoothed,
+         * clamped), so arrows and lanes agree on the road. Without it the server's estimate, which swings (0.6-4.5 m
+         * within one recorded drive), clamped to a plausible dash / mount height: no step at the ends of the range.
+         */
+        fun heightOf(world: WorldSnapshot): Double {
+            val h = world.laneLayout?.cameraHeightMeters?.takeIf { it.isFinite() }
+                ?: world.camera?.cameraHeightMeters?.takeIf { it.isFinite() }
+                ?: return DEFAULT_CAMERA_HEIGHT_M
+            return h.coerceIn(PLAUSIBLE_CAMERA_HEIGHT_M)
         }
     }
 }

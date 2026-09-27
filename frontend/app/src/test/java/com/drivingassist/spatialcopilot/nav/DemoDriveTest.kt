@@ -6,11 +6,19 @@ import com.drivingassist.copilot.context.DrivingEvent
 import com.drivingassist.copilot.context.DrivingEventType
 import com.drivingassist.copilot.context.FollowingState
 import com.drivingassist.copilot.context.LaneAction
+import com.drivingassist.copilot.context.LaneGuidance
+import com.drivingassist.copilot.context.LaneLayout
+import com.drivingassist.copilot.context.Priority
 import com.drivingassist.copilot.context.SpeedLimitSource
 import com.drivingassist.copilot.context.WorldSnapshot
 import com.drivingassist.copilot.perception.ImageSize
+import com.drivingassist.spatialcopilot.ar.ArInput
+import com.drivingassist.spatialcopilot.ar.ArSceneBuilder
+import com.drivingassist.spatialcopilot.ar.FillCenter
 import com.drivingassist.spatialcopilot.ar.Ground
 import com.drivingassist.spatialcopilot.ar.GroundProjector
+import com.drivingassist.spatialcopilot.ar.LaneArrowStyle
+import com.drivingassist.spatialcopilot.ar.Vec2
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -118,6 +126,72 @@ class DemoDriveTest {
             val left = lateralOf(lines(world)[lane - 1], g.z)
             val right = lateralOf(lines(world)[lane], g.z)
             assertTrue("anchor inside lane $lane at $t s", g.x > left + 0.5 && g.x < right - 0.5)
+        }
+    }
+
+    @Test
+    fun `the lane layout of the scripted lines has three lanes and follows the car into lane 3`() {
+        for (i in 0 until 160) {
+            val t = i * 0.25
+            val world = DemoDrive.world(t, 1)
+            val layout = world.laneLayout
+            assertNotNull("layout at $t s", layout)
+            assertEquals("the bridge's layout of the snapshot", LaneLayout.from(world.copy(laneLayout = null)), layout)
+            assertEquals("lanes at $t s", 3, layout!!.laneCount)
+            assertTrue("usable at $t s: q ${layout.quality}", layout.usable())
+            // The car's lane flips when the camera crosses the line, half way through the move (13.75 s).
+            if (abs(t % DemoDrive.LOOP_S - DemoDrive.CHANGE_MID_S) > 0.3) assertEquals("ego lane at $t s", world.lanes!!.currentLane, layout.egoLane)
+        }
+        // So DEMO draws an arrow on every lane: the exit lane green, and once the debounce has run, the car's lane red and the exit lane blinking.
+        val b = ArSceneBuilder()
+        val guidance = LaneGuidance(LaneAction.CHANGE_LANE_RIGHT, 2, 3, listOf(3), 1, Priority.UPCOMING_NAVIGATION, "")
+        var scene = b.build(ArInput(DemoDrive.world(5.0, 1), DrivingContext(laneGuidance = guidance), DemoDrive.route(5.0, 0L), 350.0, false), 2560f, 1600f, 1L)
+        for (i in 1..60) {
+            val t = 5.0 + i * 0.016
+            scene = b.build(ArInput(DemoDrive.world(t, 1), DrivingContext(laneGuidance = guidance), DemoDrive.route(t, 0L), DemoDrive.exitDistance(t), false), 2560f, 1600f, 1L + i * 16_000_000L)
+        }
+        assertEquals(listOf(1, 2, 3), scene.laneArrows.map { it.lane }.sortedBy { it })
+        assertEquals(LaneArrowStyle.WRONG, scene.laneArrows.single { it.lane == 2 }.style)
+        assertEquals(LaneArrowStyle.TARGET_BLINK, scene.laneArrows.single { it.lane == 3 }.style)
+        assertEquals(LaneArrowStyle.OTHER, scene.laneArrows.single { it.lane == 1 }.style)
+    }
+
+    /** Even-odd point-in-polygon. */
+    private fun inside(p: Vec2, polygon: List<Vec2>): Boolean {
+        var c = false
+        var j = polygon.lastIndex
+        for (i in polygon.indices) {
+            val a = polygon[i]
+            val b = polygon[j]
+            if ((a.y > p.y) != (b.y > p.y) && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x) c = !c
+            j = i
+        }
+        return c
+    }
+
+    @Test
+    fun `the drivable road is the area between the outer lines and the lane arrows lie inside it`() {
+        for (t in listOf(0.0, 13.0, 20.0)) {
+            val world = DemoDrive.world(t, 1)
+            val road = world.road!!.road.drivablePolygon
+            assertTrue("at most 32 points like the server's: ${road.size}", road.size in 3..32)
+            assertEquals("at $t s", lines(world).first() + lines(world).last().asReversed(), road)
+        }
+        val b = ArSceneBuilder()
+        val guidance = LaneGuidance(LaneAction.CHANGE_LANE_RIGHT, 2, 3, listOf(3), 1, Priority.UPCOMING_NAVIGATION, "")
+        var scene = b.build(ArInput(DemoDrive.world(5.0, 1), DrivingContext(laneGuidance = guidance), DemoDrive.route(5.0, 0L), 350.0, false), 2560f, 1600f, 1L)
+        for (i in 1..30) {
+            val t = 5.0 + i * 0.016
+            scene = b.build(ArInput(DemoDrive.world(t, 1), DrivingContext(laneGuidance = guidance), DemoDrive.route(t, 0L), DemoDrive.exitDistance(t), false), 2560f, 1600f, 1L + i * 16_000_000L)
+        }
+        // The canvas clips the arrows to the outline (DEMO exercises that path); they lie inside it anyway, and still start
+        // 6 m ahead since the outline ends at 3 m.
+        val map = FillCenter(960, 540, 2560f, 1600f)
+        assertEquals(DemoDrive.world(5.0 + 30 * 0.016, 1).road!!.road.drivablePolygon.map { map.point(it[0], it[1]) }, scene.drivable)
+        assertEquals(3, scene.laneArrows.size)
+        for (a in scene.laneArrows) {
+            assertTrue("lane ${a.lane} inside the road", a.outline.all { inside(it, scene.drivable) })
+            assertEquals("lane ${a.lane} starts 6 m ahead", map.point(0.0, projector.rowAt(6.0)).y, a.outline.maxOf { it.y }, 1f)
         }
     }
 

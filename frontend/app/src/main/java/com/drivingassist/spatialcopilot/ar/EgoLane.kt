@@ -57,14 +57,26 @@ data class EgoLane(
         /** Lanes older than this (media seconds) are not used for the arrows. */
         const val MAX_LANES_AGE_S = 1.0
         private const val MAX_SAMPLE_Z = 60.0
-        private const val MAX_SLOPE = 0.15
+        /** Heading limit dx/dz (about 19 degrees): recorded drives had the phone yawed 7-18 degrees off the road. */
+        const val MAX_SLOPE = 0.35
         private const val MAX_OFFSET_M = 2.0
 
         val AXIS = EgoLane(0.0, 0.0, 0.0, DEFAULT_LANE_WIDTH_M, 60.0, Source.CAMERA_AXIS)
 
-        /** Best available ego lane of [world]: lane lines, then anchors, then the camera axis. */
-        fun from(world: WorldSnapshot, projector: GroundProjector): EgoLane =
-            fromLaneLines(world, projector) ?: fromAnchors(world, projector) ?: AXIS
+        /**
+         * Best available ego lane of [world]: lane lines, then anchors, then the camera axis. Anchors (a few metres)
+         * and the camera axis take their heading from the road's vanishing point when there is one
+         * ([roadVanishingX]): with a yawed phone the road does not run along the camera axis. A lane-lines fit
+         * keeps its own heading (measured on the same painted lines, and it may curve).
+         */
+        fun from(world: WorldSnapshot, projector: GroundProjector): EgoLane {
+            fromLaneLines(world, projector)?.let { return it }
+            val lane = fromAnchors(world, projector) ?: AXIS
+            val heading = roadVanishingX(world)?.let { projector.headingAt(it).coerceIn(-MAX_SLOPE, MAX_SLOPE) } ?: return lane
+            // The camera axis starts under the camera; anchors keep their lateral position halfway along their span.
+            val zRef = if (lane.source == Source.CAMERA_AXIS) 0.0 else lane.maxZ / 2
+            return lane.copy(a = (lane.x(zRef) - heading * zRef - lane.c * zRef * zRef).coerceIn(-MAX_OFFSET_M, MAX_OFFSET_M), b = heading)
+        }
 
         /**
          * The two boundaries around the car: at a near row, the adjacent pair of polylines (ordered left to
@@ -142,8 +154,8 @@ data class EgoLane(
             val (a, b, c) = if (curve) quadratic(samples) else linear(samples).let { Triple(it.first, it.second, 0.0) }
             // A curvature that bends more than 4 m of lateral offset over the sampled range is noise.
             val cc = c.coerceIn(-4.0 / (zMax * zMax), 4.0 / (zMax * zMax))
-            // A dash cam looks along its lane: heading within about 8.5 degrees (the server clamps its ego-path yaw
-            // at 8) and the lane centre within 2 m of the camera. Short or noisy fits (intersections) stay sane.
+            // A phone on the dash looks roughly along its lane: heading within about 19 degrees (a yawed mount) and the
+            // lane centre within 2 m of the camera. Short or noisy fits (intersections) stay sane.
             return EgoLane(a.coerceIn(-MAX_OFFSET_M, MAX_OFFSET_M), b.coerceIn(-MAX_SLOPE, MAX_SLOPE), cc, width, zMax, source)
         }
 

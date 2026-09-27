@@ -163,6 +163,8 @@ class VoiceCoordinator(context: Context, private val parent: CoroutineScope) {
                 routeDistanceMeters = session.routeDistanceNow(route),
                 live = session.settings.mode == SourceMode.LIVE,
                 gpsAccuracyMeters = session.gps.value?.accuracyMeters,
+                // The gate the Driving Context runs with (the settings switch); DEMO has no bridge and no pedestrians.
+                speedGateMps = session.bridge?.config?.drivingContext?.criticalMinEgoSpeedMps,
             )
             for (r in policy.step(input)) {
                 prepare(r)

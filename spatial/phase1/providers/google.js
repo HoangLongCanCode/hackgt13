@@ -26,10 +26,18 @@ const PLACES_MAX_RESULTS = 8;
 const PLACES_BIAS_RADIUS_METERS = 20000;
 
 function stripHtml(value) {
-  return String(value || '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
+  // A <div> starts a new line in Directions' html_instructions ("Turn <b>left</b><div>Destination will be on the left</div>").
+  return String(value || '').replace(/<div\b[^>]*>/gi, ' ').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
 }
 
-function normalizeManeuver(maneuver) {
+/**
+ * Provider maneuver -> the project maneuver. [instruction] (optional) wins for "Keep left" / "Keep right": Google
+ * can send such a step with a slight-left / slight-right maneuver, and it is a lane choice, not a turn.
+ */
+function normalizeManeuver(maneuver, instruction) {
+  const words = stripHtml(instruction);
+  if (/^keep left\b/i.test(words)) return 'keep_left';
+  if (/^keep right\b/i.test(words)) return 'keep_right';
   // Directions uses 'turn-left', Routes 'TURN_LEFT': compare in one spelling.
   const value = String(maneuver || '').toLowerCase().replace(/_/g, '-');
   // Specific maneuvers first: 'keep-left', 'fork-right', 'ramp-left' also contain 'left' / 'right'.
@@ -42,13 +50,23 @@ function normalizeManeuver(maneuver) {
   return 'straight';
 }
 
-/** "Turn left onto Peachtree St NE" -> "Peachtree St NE"; "Head north on 10th St" -> "10th St"; else undefined. */
+/**
+ * "Turn left onto Peachtree St NE" -> "Peachtree St NE"; "Head north on 10th St" -> "10th St"; else undefined.
+ * Takes the raw instruction: only its first line names the road. Google puts notices ("Toll road", "Entering Georgia",
+ * "Pass by ...", "Destination will be ...") on a second line, after '\n' (Routes) or in a <div> (Directions).
+ * A side is not a road: "on the left" / "on the right" and everything from "Destination will be" on are ignored,
+ * so "Turn left\nDestination will be on the left" -> undefined.
+ */
 function roadNameOf(instruction) {
-  const text = stripHtml(instruction);
-  const onto = /\bonto\s+(.+?)(?:\s+toward\b.*|\s*\/.*)?$/i.exec(text);
-  if (onto) return onto[1].trim();
-  const on = /\b(?:on|along)\s+(.+?)(?:\s+toward\b.*|\s*\/.*)?$/i.exec(text);
-  return on ? on[1].trim() : undefined;
+  const firstLine = String(instruction || '').split(/\n|(?=<div\b)/i).find((part) => stripHtml(part)) || '';
+  const text = stripHtml(firstLine)
+    .replace(/\s*\bdestination will be\b.*$/i, '')
+    .replace(/\s*\bon the (?:left|right)\b/gi, '')
+    .trim();
+  const m = /\bonto\s+(.+?)(?:\s+toward\b.*|\s*\/.*)?$/i.exec(text) ||
+    /\b(?:on|along)\s+(.+?)(?:\s+toward\b.*|\s*\/.*)?$/i.exec(text);
+  const name = m ? m[1].trim() : '';
+  return name && !/^the (?:left|right)$/i.test(name) ? name : undefined;
 }
 
 function exitNumberOf(instruction) {
@@ -280,10 +298,10 @@ function normalizeSteps(steps, destinationLabel, read) {
     return {
       stepId: `step_${index + 1}`,
       instruction,
-      maneuver: normalizeManeuver(step.maneuver),
+      maneuver: normalizeManeuver(step.maneuver, instruction),
       distanceMeters: step.distanceMeters,
       durationSeconds: step.durationSeconds,
-      roadName: roadNameOf(instruction),
+      roadName: roadNameOf(step.instruction),
       exitNumber: exitNumberOf(instruction),
       polyline: step.polyline,
     };

@@ -1,13 +1,17 @@
 package com.drivingassist.spatialcopilot.ar
 
 import com.drivingassist.copilot.context.LaneAction
+import com.drivingassist.copilot.context.LaneGuidance
+import com.drivingassist.copilot.context.LaneLayout
 import com.drivingassist.copilot.context.Maneuver
 import com.drivingassist.copilot.context.WorldSnapshot
 import com.drivingassist.spatialcopilot.nav.RouteGuide
 import java.util.Locale
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.cos
+import kotlin.math.exp
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
@@ -25,7 +29,8 @@ enum class LaneArrowStyle { TARGET, TARGET_BLINK, WRONG, OTHER }
 
 /**
  * One arrow lying flat on the road, in view pixels.
- * @param lane 1-based lane from the left; null = the ego lane when lane numbers are not known.
+ * @param lane 1-based lane of the [LaneLayout] from the left; null = not a lane of the displayed layout: the car's
+ *   lane when there is no usable layout, or a lane that has just left the layout (fading out where it was drawn).
  * @param outline closed simple polygon.
  * @param alpha final opacity (fade, emphasis and blink applied).
  */
@@ -37,35 +42,69 @@ data class LaneArrow(
     val alpha: Float,
 )
 
-/** Lane numbers the arrows may rely on (see [LaneArrows.knownLanes]). */
-data class KnownLanes(val currentLane: Int, val laneCount: Int, val confidence: Double)
+/**
+ * One lane in analysed-image pixels, between two image lines through ([apexX], [apexY]):
+ * `x(y) = apexX + slope * (y - apexY)`. A lane of a [LaneLayout] has its two lines meeting at the layout's
+ * vanishing point; the lone arrow's lane (no layout) is 3.5 m wide around the camera's ground track and
+ * meets at the horizon.
+ * @param nearestRowY the arrow does not start below this row (the lowest row a lane line reached); null = no limit.
+ * @param roadBottomY lowest row of the drivable road on the lane's midline (above the dashboard, hood or A-pillar):
+ *   the arrow starts [LaneArrows.START_GAP_M] beyond it; null = no drivable outline known.
+ */
+data class LaneStrip(
+    val apexX: Double,
+    val apexY: Double,
+    val leftSlope: Double,
+    val rightSlope: Double,
+    val nearestRowY: Double? = null,
+    val roadBottomY: Double? = null,
+) {
+    /** x at row [y] of lane fraction [s]: -0.5 = left line, 0 = midline, 0.5 = right line. The midline passes through the apex. */
+    fun x(s: Double, y: Double): Double = apexX + (leftSlope + (0.5 + s) * (rightSlope - leftSlope)) * (y - apexY)
+}
+
+/** The stretch of road an arrow covers: [z0] (near end) to [z1] metres ahead. */
+data class ArrowSpan(val z0: Double, val z1: Double)
 
 /** Output of [LaneArrowsBuilder.build] for one display frame. */
 class LaneArrowFrame(
     val arrows: List<LaneArrow>,
     /** View rects of road users overlapping the arrows (inflated): the arrows are not painted over them. */
     val occluders: List<ViewRect>,
-    /** Debug badge, e.g. "lanes 2/3 conf 0.82 targets 3 WRONG" or "lanes unknown: conf 0.21". */
+    /** Outline of the drivable road (closed, view pixels): the arrows are painted only inside it; empty = unknown. */
+    val drivable: List<Vec2>,
+    /** Debug badge, e.g. "layout 2/3 q0.72 targets 3 WRONG" or "layout unknown". */
     val status: String,
+    /** The layout the arrows were placed on (display-smoothed); null = no usable layout. */
+    val layout: LaneLayout? = null,
 )
 
 /**
- * Painted-style lane arrows: glyph outlines in lane-local metres and their projection onto the road.
- * Lane numbers come from the lane model (`world.lanes`), target lanes from the Driving Context's lane
- * guidance, positions from the fitted ego lane plus whole lane widths. Nothing here decides a route.
+ * Painted-style lane arrows: glyph outlines in lane coordinates and their mapping onto the image. Lanes come
+ * from the lane layout (`world.laneLayout`: the detected lane lines through one vanishing point), target
+ * lanes from the Driving Context's lane guidance. Each arrow is laid out between its lane's own two lines,
+ * so it points where they meet whatever the phone's yaw. Nothing here decides a route.
  */
 object LaneArrows {
-    /** The arrow starts this far beyond the nearest visible road (the hood), and never nearer than [MIN_START_Z]. */
-    const val START_GAP_M = 2.0
-    const val MIN_START_Z = 9.0
-    const val LENGTH_M = 7.0
+    /**
+     * The arrow starts this far beyond the nearest visible road (the hood, or where its lane's midline leaves the
+     * drivable road above the dashboard / A-pillar), and never nearer than [MIN_START_Z].
+     */
+    const val START_GAP_M = 1.0
+    const val MIN_START_Z = 6.0
+    const val LENGTH_M = 6.0
 
-    /** Lane numbers are used only from a fresh (<= 1 s), confident run of at most 6 lanes that saw lines. */
-    const val MIN_CONFIDENCE = 0.3
-    const val MAX_LANE_COUNT = 6
+    /** The arrow's far end stays this many image pixels below the vanishing point. */
+    const val VP_GAP_PX = 8.0
 
-    /** Lanes drawn on each side of the car in the lane-choice case. */
-    const val SIDE_LANES = 2
+    /** A layout is used when the bridge marks it stable and it is at most this old (media seconds): the bridge's "usable". */
+    const val MAX_LAYOUT_AGE_S = LaneLayout.MAX_USABLE_AGE_SECONDS
+
+    /** Width of the lone arrow's lane when there is no usable layout. */
+    const val AXIS_LANE_W = 3.5
+
+    /** Display smoothing of the layout between perception results (a changed set of lines snaps). */
+    const val LAYOUT_TAU_S = 0.1
 
     /** Target arrows take the turn / bear glyph this close to the maneuver. */
     const val GLYPH_M = 100.0
@@ -83,12 +122,21 @@ object LaneArrows {
     const val IDLE_ALPHA = 0.55f
     const val OTHER_FACTOR = 0.45f
 
-    private const val STEP_M = 0.25
-    private const val SHAFT_HALF_W = 0.225
+    /** Turn / bear heads stay this far (lane fractions) from the lane midline, inside the lines. */
+    const val MAX_S = 0.42
 
-    /** Lane-local outline: [u] metres across (+ right of the lane centre), [v] metres along (0 = arrow start). */
-    class Outline(val u: DoubleArray, val v: DoubleArray) {
-        val size: Int get() = u.size
+    /** Glyphs are drawn in a nominal lane this wide (and [LENGTH_M] long), then stored as lane fractions. */
+    private const val NOMINAL_W_M = 3.5
+    private const val SHAFT_HALF_M = 0.065 * NOMINAL_W_M
+    private const val HEAD_HALF_M = 0.19 * NOMINAL_W_M
+    private const val HEAD_LEN_M = LENGTH_M / 3
+    private const val STEP_M = 0.25
+    private const val MIN_SPAN_M = 2.0
+    private const val MIN_ROWS_PX = 6.0
+
+    /** Lane-local outline: [s] across the lane in lane widths (-0.5..0.5, + right), [t] along it (0 = near end, 1 = far end). */
+    class Outline(val s: DoubleArray, val t: DoubleArray) {
+        val size: Int get() = s.size
     }
 
     private val outlines: Map<LaneArrowGlyph, Outline> = LaneArrowGlyph.entries.associateWith { build(it) }
@@ -96,25 +144,199 @@ object LaneArrows {
     fun outline(glyph: LaneArrowGlyph): Outline = outlines.getValue(glyph)
 
     /**
-     * Lane numbers of [world] when they can be relied on, else null with [reason] set: lanes fresh
-     * (<= [EgoLane.MAX_LANES_AGE_S]), confidence >= [MIN_CONFIDENCE], 1 <= current <= count <= [MAX_LANE_COUNT],
-     * the run saw lines ([linesSeen]), and the ego lane measured from lines or anchors (on the camera
-     * axis the lane positions are unknown).
+     * [world]'s lane layout when it can be relied on, else null with [reason] set (not set when there is no
+     * layout at all): at most [MAX_LAYOUT_AGE_S] old, [LaneLayout.stable] (the bridge's quality gate, with
+     * hysteresis over runs, so the Driving Context's lane guidance flips with it), the car's lane among its lanes.
      */
-    fun knownLanes(world: WorldSnapshot, egoSource: EgoLane.Source, linesSeen: Boolean, reason: (String) -> Unit = {}): KnownLanes? {
-        val lanes = world.lanes ?: return null.also { reason("none") }
-        if (lanes.ageSeconds > EgoLane.MAX_LANES_AGE_S) return null.also { reason("old ${fmt(lanes.ageSeconds, 1)} s") }
-        val conf = lanes.lanes.confidence
-        if (conf < MIN_CONFIDENCE) return null.also { reason("conf ${fmt(conf, 2)}") }
-        val count = lanes.laneCount
-        val current = lanes.currentLane
-        if (count == null || current == null || count !in 1..MAX_LANE_COUNT || current !in 1..count) {
-            return null.also { reason("lane ${current ?: "?"}/${count ?: "?"}") }
+    fun usableLayout(world: WorldSnapshot, reason: (String) -> Unit = {}): LaneLayout? {
+        val layout = world.laneLayout ?: return null
+        if (layout.ageSeconds > MAX_LAYOUT_AGE_S) return null.also { reason("old ${fmt(layout.ageSeconds, 1)} s") }
+        if (!layout.stable) return null.also {
+            reason((if (layout.quality < LaneLayout.USABLE_QUALITY) "q" else "unstable q") + fmt(layout.quality, 2))
         }
-        if (!linesSeen) return null.also { reason("no lines") }
-        if (egoSource == EgoLane.Source.CAMERA_AXIS) return null.also { reason("camera axis") }
-        return KnownLanes(current, count, conf)
+        if (layout.lines.size < 2 || layout.egoLane !in 1..layout.laneCount) return null.also { reason("lane ${layout.egoLane}/${layout.laneCount}") }
+        return layout
     }
+
+    /**
+     * The outline of the drivable road of [world] (image px, at least 3 points) from a lanes-fresh road run; null when
+     * the server sent none (the arrows are then placed and painted as without it, unless [roadHidden]).
+     */
+    fun drivableRoad(world: WorldSnapshot): List<List<Double>>? =
+        world.road?.takeIf { it.ageSeconds <= EgoLane.MAX_LANES_AGE_S }?.road?.drivablePolygon
+            ?.filter { it.size >= 2 && it[0].isFinite() && it[1].isFinite() }
+            ?.takeIf { it.size >= 3 }
+
+    /**
+     * The server sees no road: a lanes-fresh road run without a usable drivable outline (a v2 server sends `[]`, e.g.
+     * stopped close behind a car, where the rest of the picture is crosswalk and median). No lane arrow is drawn then;
+     * the instruction banner still guides. [outlinesSeen]: this session's server has sent an outline before. The field
+     * decodes to empty when absent, so only then does an empty one mean "no road"; an old server that never sends it
+     * keeps the unclipped arrows. No fresh road run at all is not "no road" either (the lone arrow along the track).
+     */
+    fun roadHidden(world: WorldSnapshot, outlinesSeen: Boolean): Boolean =
+        outlinesSeen && world.road?.takeIf { it.ageSeconds <= EgoLane.MAX_LANES_AGE_S } != null && drivableRoad(world) == null
+
+    /**
+     * The near end of an arrow in [strip] over [span] is on the drivable road [polygon]: at or above the road's bottom
+     * edge on the lane's midline ([roadBottomRow]). An arrow fading out on the strip it was placed on is drawn only then,
+     * so a new road outline never shows it cut off below the road's edge.
+     */
+    fun nearEndOnRoad(strip: LaneStrip, span: ArrowSpan, polygon: List<List<Double>>, projector: GroundProjector): Boolean {
+        val bottom = roadBottomRow(strip, polygon, projector.imageHeight.toDouble()) ?: return false
+        return projector.rowAt(span.z0) <= bottom + 1e-6
+    }
+
+    /**
+     * Lowest row where [strip]'s midline is on the drivable road [polygon] (image px, closed) below [VP_GAP_PX] under
+     * the apex: the road's bottom edge in that lane (dashboard, hood, A-pillar). A car standing in the lane only
+     * notches the outline higher up, so the lowest exit is the one that counts. [imageHeight] when the midline
+     * reaches the bottom of the image on the road; null when it never meets the road.
+     */
+    fun roadBottomRow(strip: LaneStrip, polygon: List<List<Double>>, imageHeight: Double): Double? {
+        val top = strip.apexY + VP_GAP_PX
+        // Signed column offset from the midline (a straight image line): it changes sign where an edge crosses it.
+        fun side(p: List<Double>) = p[0] - strip.x(0.0, p[1])
+        val rows = ArrayList<Double>()
+        for (i in polygon.indices) {
+            val p = polygon[i]
+            val q = polygon[(i + 1) % polygon.size]
+            val a = side(p)
+            val b = side(q)
+            if ((a > 0) == (b > 0)) continue
+            rows += p[1] + (q[1] - p[1]) * a / (a - b)
+        }
+        // Along the line the outline is crossed alternately inwards and outwards; the last crossing is an exit.
+        val below = rows.filter { it > top }
+        if (below.isEmpty()) return if (rows.count { it <= top } % 2 == 1) imageHeight else null
+        return min(below.max(), imageHeight)
+    }
+
+    /** [strip] with its [LaneStrip.roadBottomY] on [road] (see [roadBottomRow]); null when its midline misses the road. No outline: as is. */
+    fun onRoad(strip: LaneStrip, road: List<List<Double>>?, imageHeight: Double): LaneStrip? {
+        if (road == null) return strip
+        return roadBottomRow(strip, road, imageHeight)?.let { strip.copy(roadBottomY = it) }
+    }
+
+    /** Lane [lane] (1-based) of [layout]; null outside its lanes or when its lines do not open towards the car. */
+    fun strip(layout: LaneLayout, lane: Int): LaneStrip? {
+        if (lane !in 1..layout.laneCount) return null
+        val left = layout.lines[lane - 1].slope
+        val right = layout.lines[lane].slope
+        if (right - left < 1e-3) return null
+        return LaneStrip(layout.vpX, layout.vpY, left, right, layout.nearestRowY)
+    }
+
+    /**
+     * The car's lane without a usable layout: [AXIS_LANE_W] wide at every row around the camera's ground track,
+     * the vertical image line through [trackX]. On flat ground a lateral offset `u` metres is `u cos(pitch) / h`
+     * pixels per pixel below the horizon.
+     */
+    fun axisStrip(world: WorldSnapshot, projector: GroundProjector): LaneStrip {
+        val half = AXIS_LANE_W / 2 * cos(projector.pitch) / projector.cameraHeightMeters
+        return LaneStrip(trackX(world, projector), projector.horizonY, -half, half)
+    }
+
+    /**
+     * Image column of the camera's ground track: the road's vanishing point ([roadVanishingX]), else the session's
+     * newest one ([WorldSnapshot.trackVpX], kept by the bridge through stretches without road or lines: a mounted
+     * phone's yaw does not change), and only then the principal point (the camera axis, metres off the track with a
+     * yawed phone, on a lane line).
+     */
+    fun trackX(world: WorldSnapshot, projector: GroundProjector): Double =
+        roadVanishingX(world)
+            ?: world.trackVpX?.takeIf { it.isFinite() && it in 0.0..projector.imageWidth.toDouble() }
+            ?: projector.cx
+
+    /** Where the arrows start on the road. */
+    fun startZ(projector: GroundProjector): Double = max(projector.nearestVisibleZ + START_GAP_M, MIN_START_Z)
+
+    /**
+     * The road an arrow in [strip] covers: [LENGTH_M] from [startZ], started farther when that row is below the
+     * lowest row the lines reached, and at least [START_GAP_M] beyond the drivable road's bottom edge in the lane
+     * ([LaneStrip.roadBottomY]), then shortened to end [VP_GAP_PX] below the apex. Null when too little is left
+     * (under 2 m of road or 6 image rows).
+     */
+    fun span(strip: LaneStrip, projector: GroundProjector): ArrowSpan? {
+        var z0 = startZ(projector)
+        val cap = strip.nearestRowY
+        if (cap != null && projector.rowAt(z0) > cap) z0 = projector.forwardAtRow(cap) ?: return null
+        val road = strip.roadBottomY
+        if (road != null) z0 = max(z0, (projector.forwardAtRow(road) ?: return null) + START_GAP_M)
+        val top = strip.apexY + VP_GAP_PX
+        var z1 = z0 + LENGTH_M
+        if (projector.rowAt(z1) < top) z1 = projector.forwardAtRow(top) ?: return null
+        if (z1 - z0 < MIN_SPAN_M || projector.rowAt(z0) - projector.rowAt(z1) < MIN_ROWS_PX) return null
+        return ArrowSpan(z0, z1)
+    }
+
+    /**
+     * [glyph] mapped into view pixels: row `rowAt(z0 + t (z1 - z0))` (perspective along the lane), column
+     * [LaneStrip.x] at that row (across the lane between its lines).
+     */
+    fun project(glyph: LaneArrowGlyph, strip: LaneStrip, span: ArrowSpan, projector: GroundProjector, map: FillCenter): List<Vec2> {
+        val o = outline(glyph)
+        val len = span.z1 - span.z0
+        return List(o.size) { i ->
+            val y = projector.rowAt(span.z0 + o.t[i] * len)
+            map.point(strip.x(o.s[i], y), y)
+        }
+    }
+
+    /** View point of the middle of the arrow (lane midline, halfway along). */
+    fun center(strip: LaneStrip, span: ArrowSpan, projector: GroundProjector, map: FillCenter): Vec2 {
+        val y = projector.rowAt((span.z0 + span.z1) / 2)
+        return map.point(strip.x(0.0, y), y)
+    }
+
+    /**
+     * [to] is [from] a little later (the same lines, moved less than a third of a lane, vanishing point within
+     * 60 px), so the display may glide between them; otherwise it snaps.
+     */
+    fun sameLines(from: LaneLayout, to: LaneLayout): Boolean {
+        if (from.lines.size != to.lines.size) return false
+        if (abs(from.vpX - to.vpX) > 60.0 || abs(from.vpY - to.vpY) > 60.0) return false
+        val n = to.lines.size
+        for (i in 0 until n) {
+            val s = to.lines[i].slope
+            val gapLeft = if (i > 0) s - to.lines[i - 1].slope else Double.MAX_VALUE
+            val gapRight = if (i < n - 1) to.lines[i + 1].slope - s else Double.MAX_VALUE
+            if (abs(from.lines[i].slope - s) > min(gapLeft, gapRight) / 3) return false
+        }
+        return true
+    }
+
+    /**
+     * How [to]'s lines are numbered against [from]'s, when the set of lines changed (a line gained or lost at an
+     * edge): d such that line i of [from] is line i + d of [to]. It is the shift, with at least two lines in common,
+     * whose common lines differ least in slope on average; null when even that is more than a third of [to]'s mean
+     * lane (a different road).
+     */
+    fun lineOffset(from: LaneLayout, to: LaneLayout): Int? {
+        if (from.lines.size < 2 || to.lines.size < 2) return null
+        val lane = (to.lines.last().slope - to.lines.first().slope) / (to.lines.size - 1)
+        var best: Int? = null
+        var bestCost = Double.MAX_VALUE
+        for (d in -(from.lines.size - 2)..(to.lines.size - 2)) {
+            var sum = 0.0
+            var n = 0
+            for (i in from.lines.indices) {
+                if (i + d !in to.lines.indices) continue
+                sum += abs(from.lines[i].slope - to.lines[i + d].slope)
+                n++
+            }
+            if (n >= 2 && sum / n < bestCost) { bestCost = sum / n; best = d }
+        }
+        return best.takeIf { bestCost <= lane / 3 }
+    }
+
+    /** [from] moved towards [to] by [t] in 0..1; lane numbers, quality and age are [to]'s. */
+    fun blend(from: LaneLayout, to: LaneLayout, t: Double): LaneLayout = to.copy(
+        vpX = from.vpX + (to.vpX - from.vpX) * t,
+        vpY = from.vpY + (to.vpY - from.vpY) * t,
+        lines = to.lines.mapIndexed { i, l -> l.copy(slope = from.lines[i].slope + (l.slope - from.lines[i].slope) * t) },
+        nearestRowY = from.nearestRowY + (to.nearestRowY - from.nearestRowY) * t,
+    )
 
     /** Glyph for a target lane: the maneuver's shape within [GLYPH_M], else straight. Unknown side: straight. */
     fun targetGlyph(route: RouteGuide?, distanceMeters: Double?): LaneArrowGlyph {
@@ -135,43 +357,16 @@ object LaneArrows {
         }
     }
 
-    /** Where the arrows start on the road. */
-    fun startZ(projector: GroundProjector): Double = max(projector.nearestVisibleZ + START_GAP_M, MIN_START_Z)
-
-    /**
-     * Road point of lane-local ([u], [v]) in the lane [offsetLanes] lanes right of the ego lane: centre
-     * `ego.x(z) + offset * width`, [u] along the lane's normal so the glyph follows the lane heading.
-     */
-    fun ground(ego: EgoLane, offsetLanes: Int, z0: Double, u: Double, v: Double): Ground {
-        val z = z0 + v
-        val s = ego.slope(z)
-        val inv = 1.0 / sqrt(1.0 + s * s)
-        return Ground(ego.x(z) + offsetLanes * ego.widthMeters + u * inv, z - u * s * inv)
-    }
-
-    /** [glyph] projected into view pixels; null when any point cannot be projected. */
-    fun project(glyph: LaneArrowGlyph, ego: EgoLane, offsetLanes: Int, z0: Double, projector: GroundProjector, map: FillCenter): List<Vec2>? {
-        val o = outline(glyph)
-        val out = ArrayList<Vec2>(o.size)
-        for (i in 0 until o.size) {
-            val p = projector.toImage(ground(ego, offsetLanes, z0, o.u[i], o.v[i])) ?: return null
-            out += map.point(p)
-        }
-        return out
-    }
-
-    /** View point of the middle of the arrow (lane centre, halfway along). */
-    fun center(ego: EgoLane, offsetLanes: Int, z0: Double, projector: GroundProjector, map: FillCenter): Vec2? =
-        projector.toImage(ground(ego, offsetLanes, z0, 0.0, LENGTH_M / 2))?.let(map::point)
-
     /** Smooth pulse starting fully on: 1.0 -> 0.25 -> 1.0 every [BLINK_PERIOD_S]. */
     fun blink(sinceS: Double): Float = (0.625 + 0.375 * cos(2 * PI * sinceS / BLINK_PERIOD_S)).toFloat()
 
     // --- Glyph outlines -------------------------------------------------------------------------
+    // Drawn in metres in a nominal lane (u across, + right of the midline; v along, 0..LENGTH_M) so the stroke
+    // keeps its width through bends, then stored as lane fractions (s = u / NOMINAL_W_M, t = v / LENGTH_M).
 
     private fun build(glyph: LaneArrowGlyph): Outline {
         val right = when (glyph) {
-            LaneArrowGlyph.STRAIGHT -> stroke(listOf(0.0 to 0.0, 0.0 to LENGTH_M - 2.4), headHalf = 0.65, headLen = 2.4)
+            LaneArrowGlyph.STRAIGHT -> stroke(listOf(0.0 to 0.0, 0.0 to LENGTH_M - HEAD_LEN_M), headHalf = HEAD_HALF_M, headLen = HEAD_LEN_M)
             LaneArrowGlyph.TURN_LEFT, LaneArrowGlyph.TURN_RIGHT -> turn()
             LaneArrowGlyph.BEAR_LEFT, LaneArrowGlyph.BEAR_RIGHT -> bear()
         }
@@ -182,12 +377,13 @@ object LaneArrows {
 
     /**
      * Shaft up the lane, a quarter bend to the right, head pointing sideways (a US turn-lane marking). The
-     * head is long along the lane (2.4 m): seen from the driver's seat, depth is foreshortened ~10x.
+     * head is long along the lane (2.3 m): seen from the driver's seat, depth is foreshortened ~10x. Its tip
+     * is 1.4 m right of the midline (s 0.4).
      */
     private fun turn(): List<Pair<Double, Double>> {
-        val u0 = -0.7
-        val r = 0.9
-        val headHalf = 1.2
+        val u0 = -0.65
+        val r = 0.85
+        val headHalf = 1.15
         val vb = LENGTH_M - headHalf - r
         val centre = ArrayList<Pair<Double, Double>>()
         centre += u0 to 0.0
@@ -197,19 +393,19 @@ object LaneArrows {
             val th = PI - (PI / 2) * i / n
             centre += (u0 + r + r * cos(th)) to (vb + r * sin(th))
         }
-        centre += (u0 + r + 0.15) to (vb + r)
-        return stroke(centre, headHalf = headHalf, headLen = 1.2)
+        centre += (u0 + r + 0.1) to (vb + r)
+        return stroke(centre, headHalf = headHalf, headLen = 1.1)
     }
 
     /** Shaft up the lane, then a diagonal to the right with the head along it. */
     private fun bear(): List<Pair<Double, Double>> {
-        val u0 = -0.6
+        val u0 = -0.55
         val du = 1.0 / sqrt(5.0)
         val dv = 2.0 / sqrt(5.0)
-        val headLen = 2.2
+        val headLen = 1.9
         val diag = 1.2
         val vk = LENGTH_M - 0.06 - (diag + headLen) * dv
-        return stroke(listOf(u0 to 0.0, u0 to vk, (u0 + diag * du) to (vk + diag * dv)), headHalf = 0.65, headLen = headLen)
+        return stroke(listOf(u0 to 0.0, u0 to vk, (u0 + diag * du) to (vk + diag * dv)), headHalf = HEAD_HALF_M, headLen = headLen)
     }
 
     /**
@@ -239,7 +435,7 @@ object LaneArrows {
             mu[i] = (au + bu) / k
             mv[i] = (av + bv) / k
         }
-        val h = SHAFT_HALF_W
+        val h = SHAFT_HALF_M
         val out = ArrayList<Pair<Double, Double>>(2 * n + 3)
         out += (centre[0].first - h * mu[0]) to (centre[0].second - h * mv[0])
         for (i in 0 until n) out += (centre[i].first + h * mu[i]) to (centre[i].second + h * mv[i])
@@ -252,21 +448,24 @@ object LaneArrows {
         return out
     }
 
-    /** Closed polygon with no edge longer than [STEP_M], so it bends with the lane on the road. */
+    /**
+     * Closed polygon with no edge longer than [STEP_M] in the nominal lane, so it bends with the perspective
+     * (a diagonal in lane coordinates is a curve on the image), stored as lane fractions.
+     */
     private fun densify(pts: List<Pair<Double, Double>>): Outline {
-        val us = ArrayList<Double>()
-        val vs = ArrayList<Double>()
+        val ss = ArrayList<Double>()
+        val ts = ArrayList<Double>()
         for (i in pts.indices) {
             val (u0, v0) = pts[i]
             val (u1, v1) = pts[(i + 1) % pts.size]
             val steps = max(1, ceil(hypot(u1 - u0, v1 - v0) / STEP_M).toInt())
-            for (s in 0 until steps) {
-                val f = s.toDouble() / steps
-                us += u0 + (u1 - u0) * f
-                vs += v0 + (v1 - v0) * f
+            for (k in 0 until steps) {
+                val f = k.toDouble() / steps
+                ss += (u0 + (u1 - u0) * f) / NOMINAL_W_M
+                ts += ((v0 + (v1 - v0) * f) / LENGTH_M).coerceIn(0.0, 1.0)
             }
         }
-        return Outline(us.toDoubleArray(), vs.toDoubleArray())
+        return Outline(ss.toDoubleArray(), ts.toDoubleArray())
     }
 
     internal fun fmt(x: Double, decimals: Int): String = String.format(Locale.US, "%.${decimals}f", x)
@@ -274,131 +473,143 @@ object LaneArrows {
 
 /**
  * Chooses, styles and fades the lane arrows at display rate. Owned by [ArSceneBuilder]; every piece of
- * presentation state (wrong-lane debounce, blink phase, per-lane fades, lane-change bookkeeping) lives
- * here and runs on the display clock (`nowNs`).
+ * presentation state (display-smoothed layout, wrong-lane debounce, blink phase, per-lane fades) lives here
+ * and runs on the display clock (`nowNs`).
  *
- * Lane choice (guidance KEEP_LANE / CHANGE_LANE_* with targets, lane numbers known): one arrow per lane
- * from current-2 to current+2. Otherwise only the ego lane's arrow, never red: unknown stays unknown. It is
- * green (TARGET) with KEEP_LANE or no lane guidance, and faint white and straight (OTHER) while the guidance
- * asks for a lane change (the car's lane is then not a route lane) or the wrong-lane look is held.
+ * With a usable layout (see [LaneArrows.usableLayout]): one arrow in every visible lane whose arrow centre is
+ * on screen, keyed by the painted lane: a line gained or lost at an edge renumbers the lanes, and each arrow's
+ * fade stays with its lane ([LaneArrows.lineOffset]). The target lanes are the lane guidance's (KEEP_LANE /
+ * CHANGE_LANE_* with targets among the visible lanes, numbered on as many lanes as are shown); with no lane
+ * guidance there is no lane requirement and the car's lane is the lane to drive. Lane guidance UNKNOWN is a lane
+ * requirement that cannot be resolved: nothing green then, every lane faint white. Targets are green, blinking
+ * while the car is in another lane, whose arrow is then red (after the debounce); every other lane is faint white.
+ * Without a usable layout: only the car's lane arrow, laid along the camera's ground track ([LaneArrows.trackX]),
+ * never red: unknown stays unknown. It is green with KEEP_LANE or no lane guidance, and faint white and straight
+ * while the guidance asks for a lane change (the car's lane is then not a route lane), is UNKNOWN, or the wrong-lane
+ * look is held. With a drivable road outline (`road.drivablePolygon`) every arrow starts above the road's bottom edge
+ * in its lane, and one fading out on its old strip is drawn only while its near end is on the new outline
+ * ([LaneArrows.nearEndOnRoad]). A fresh road run with an empty outline (the server sees no road) draws no arrow at
+ * all ([LaneArrows.roadHidden]).
  */
 class LaneArrowsBuilder {
-    private class Shown(var offset: Int, var style: LaneArrowStyle, var glyph: LaneArrowGlyph, var alpha: Float, var target: Float)
+    private class Shown(var strip: LaneStrip, var style: LaneArrowStyle, var glyph: LaneArrowGlyph, var alpha: Float, var target: Float, var lane: Int?)
 
-    /** Key: lane number, or [EGO_KEY] for the ego lane with unknown lane numbers. */
+    private class Want(val strip: LaneStrip, val style: LaneArrowStyle, val glyph: LaneArrowGlyph, val lane: Int?)
+
+    /** Key: the painted lane ([keys]), or [EGO_KEY] for the lone arrow without a layout. */
     private val shown = LinkedHashMap<Int, Shown>()
+    /** The usable layout as displayed: glides towards each new perception result ([LaneArrows.blend]). */
+    private var layout: LaneLayout? = null
+    /** The layout displayed last (kept over gaps) and the key of each of its lanes, left to right. */
+    private var keyed: LaneLayout? = null
+    private var keys = IntArray(0)
+    private var nextKey = EGO_KEY + 1
+    /** Base opacity, ramped between [LaneArrows.IDLE_ALPHA] and [LaneArrows.ACTIVE_ALPHA]; NaN = not shown yet. */
+    private var base = Float.NaN
     private var wrongLook = false
     private var pendingNs = NONE
     private var choiceLostNs = NONE
+    private var skewSinceNs = NONE
     private var blinkStartNs = 0L
-    private var linesSeenNs = NONE
-    private var lastMode: Int? = null
-    private var lastModeNs = NONE
-    private var modeChangeNs = NONE
-    private var modeChangeDir = 0
-    private var shift = 0
-    private var shiftNs = NONE
+    /** This session's server sends drivable outlines (one has come): an empty one then means no road ([LaneArrows.roadHidden]). */
+    private var outlinesSeen = false
 
+    /** Clears the presentation state; what is known about the server ([outlinesSeen]) stays. */
     fun reset() {
         shown.clear()
+        layout = null
+        keyed = null
+        keys = IntArray(0)
+        base = Float.NaN
         wrongLook = false
         pendingNs = NONE
         choiceLostNs = NONE
-        linesSeenNs = NONE
-        lastMode = null
-        lastModeNs = NONE
-        modeChangeNs = NONE
-        shift = 0
-        shiftNs = NONE
+        skewSinceNs = NONE
     }
 
-    /**
-     * @param laneShift lanes the smoothed ego lane just snapped by (+1 = the car crossed into the lane on
-     *   its right), from [ArSceneBuilder]; lane numbers (a mode over recent runs) catch up later.
-     */
-    fun build(
-        input: ArInput,
-        ego: EgoLane,
-        projector: GroundProjector,
-        map: FillCenter,
-        nowNs: Long,
-        dt: Double,
-        laneShift: Int,
-    ): LaneArrowFrame {
+    fun build(input: ArInput, projector: GroundProjector, map: FillCenter, nowNs: Long, dt: Double): LaneArrowFrame {
         val world = input.world
         val route = input.route
         val showable = route != null && !route.stale && !route.offRoute && !world.perceptionStale
 
-        val lanesState = world.lanes
-        if (lanesState != null && lanesState.ageSeconds <= EgoLane.MAX_LANES_AGE_S && lanesState.lanes.laneBoundaries.isNotEmpty()) {
-            linesSeenNs = nowNs
-        }
-        // One run without lines (~130 ms) does not drop the lane numbers; a run that saw lines 0.4 s ago still counts.
-        val linesSeen = linesSeenNs != NONE && nowNs - linesSeenNs <= LINES_HOLD_NS
-        var reason = ""
-        val known = LaneArrows.knownLanes(world, ego.source, linesSeen) { reason = it }
-
-        trackLaneChange(known?.currentLane, nowNs, laneShift)
-        if (laneShift != 0) shown.values.forEach { it.offset -= laneShift }
-        val current = known?.let { (it.currentLane + shift).coerceIn(1, it.laneCount) }
-
+        var reason: String? = if (world.perceptionStale) "stale" else null
+        val measured = if (world.perceptionStale) null else LaneArrows.usableLayout(world) { reason = it }
         val guidance = input.context.laneGuidance
             ?.takeIf { it.action == LaneAction.KEEP_LANE || it.action == LaneAction.CHANGE_LANE_LEFT || it.action == LaneAction.CHANGE_LANE_RIGHT }
-        val targets = if (known != null) guidance?.targetLanes?.filter { it in 1..known.laneCount }.orEmpty() else emptyList()
-        val choice = showable && known != null && current != null && targets.isNotEmpty()
-
-        // Wrong-lane look: on after 0.8 s of "current not in targets", off 0.3 s after reaching a target. A lane
-        // choice lost for up to 0.4 s (one low-confidence run) keeps the look and pauses the timer, so unknown
-        // time never counts as wrong-lane time; nothing red is drawn meanwhile (only the ego arrow).
-        val rawWrong = choice && current !in targets
-        if (!choice) {
-            if (choiceLostNs == NONE) choiceLostNs = nowNs
-            if (nowNs - choiceLostNs > CHOICE_HOLD_NS) { wrongLook = false; pendingNs = NONE }
-        } else {
-            if (choiceLostNs != NONE) {
-                if (pendingNs != NONE) pendingNs += nowNs - choiceLostNs
-                choiceLostNs = NONE
-            }
-            if (rawWrong == wrongLook) {
-                pendingNs = NONE
-            } else {
-                if (pendingNs == NONE) pendingNs = nowNs
-                val need = if (wrongLook) LaneArrows.RIGHT_AFTER_S else LaneArrows.WRONG_AFTER_S
-                if ((nowNs - pendingNs) / 1e9 >= need - 1e-9) {
-                    wrongLook = rawWrong
-                    pendingNs = NONE
-                    if (wrongLook) blinkStartNs = nowNs
-                }
-            }
+        // A lane requirement the Driving Context cannot resolve to lanes: the car's lane is not known to be a route lane.
+        val unresolved = input.context.laneGuidance?.action == LaneAction.UNKNOWN
+        // SIM: the Driving Context runs on the 50 ms tick's snapshot, the canvas at the player's position, up to a lanes
+        // run apart. While their lane counts differ, the display keeps the layout the targets were numbered on (0.4 s at most).
+        val ctxCount = guidance?.laneCount
+        val skewed = measured != null && ctxCount != null && ctxCount != measured.laneCount
+        if (!skewed) skewSinceNs = NONE else if (skewSinceNs == NONE) skewSinceNs = nowNs
+        val prev = layout
+        val hold = skewed && prev != null && prev.laneCount == ctxCount && nowNs - skewSinceNs <= CHOICE_HOLD_NS
+        val glide = !hold && prev != null && measured != null && LaneArrows.sameLines(prev, measured)
+        layout = when {
+            measured == null -> null
+            hold -> prev
+            glide -> LaneArrows.blend(prev!!, measured, 1.0 - exp(-dt / LaneArrows.LAYOUT_TAU_S))
+            else -> measured
         }
+        val lay = layout
+        if (lay != null) { if (hold || glide) keyed = lay else rekey(lay) }
+
+        val changeLane = guidance?.action == LaneAction.CHANGE_LANE_LEFT || guidance?.action == LaneAction.CHANGE_LANE_RIGHT
+        // Targets numbered on another lane count would land on the wrong lanes: none then (the lane choice is lost).
+        val choiceTargets = if (lay != null && guidance != null && (ctxCount == null || ctxCount == lay.laneCount)) {
+            guidance.targetLanes.filter { it in 1..lay.laneCount }.distinct()
+        } else emptyList()
+        val choice = showable && lay != null && choiceTargets.isNotEmpty()
+        debounce(choice, choice && lay!!.egoLane !in choiceTargets, nowNs)
 
         val distance = input.routeDistanceMeters
         val targetGlyph = LaneArrows.targetGlyph(route, distance)
-        val wanted = HashMap<Int, Triple<Int, LaneArrowStyle, LaneArrowGlyph>>()
-        if (showable) {
-            if (choice) {
-                val cur = current!!
-                for (k in max(1, cur - LaneArrows.SIDE_LANES)..min(known!!.laneCount, cur + LaneArrows.SIDE_LANES)) {
+        val road = LaneArrows.drivableRoad(world)
+        if (road != null) outlinesSeen = true
+        val noRoad = LaneArrows.roadHidden(world, outlinesSeen)
+        val imageH = projector.imageHeight.toDouble()
+        val wanted = HashMap<Int, Want>()
+        if (showable && !noRoad) {
+            if (lay != null) {
+                // No lane guidance: the car's lane is the lane to drive. Lane guidance without a visible target or UNKNOWN,
+                // or the wrong-lane look held over a gap in the lane choice: nothing green, and nothing red.
+                val targets = when {
+                    choice -> choiceTargets
+                    guidance != null || unresolved || wrongLook -> emptyList()
+                    else -> listOf(lay.egoLane)
+                }
+                for (k in 1..lay.laneCount) {
+                    val strip = LaneArrows.strip(lay, k)?.let { LaneArrows.onRoad(it, road, imageH) } ?: continue
+                    val key = keys.getOrNull(k - 1) ?: continue
                     val style = when {
-                        k in targets -> if (wrongLook) LaneArrowStyle.TARGET_BLINK else LaneArrowStyle.TARGET
-                        k == cur && wrongLook -> LaneArrowStyle.WRONG
+                        k in targets -> if (choice && wrongLook) LaneArrowStyle.TARGET_BLINK else LaneArrowStyle.TARGET
+                        choice && wrongLook && k == lay.egoLane -> LaneArrowStyle.WRONG
                         else -> LaneArrowStyle.OTHER
                     }
                     val glyph = if (style == LaneArrowStyle.TARGET || style == LaneArrowStyle.TARGET_BLINK) targetGlyph else LaneArrowGlyph.STRAIGHT
-                    wanted[k] = Triple(k - cur, style, glyph)
+                    wanted[key] = Want(strip, style, glyph, k)
                 }
             } else {
-                // The Driving Context says the car's lane is not a route lane, or the wrong-lane look is held over a short gap:
-                // no green, no maneuver shape. Never red either, the lane positions are unknown here.
-                val changeLane = guidance?.action == LaneAction.CHANGE_LANE_LEFT || guidance?.action == LaneAction.CHANGE_LANE_RIGHT
-                wanted[EGO_KEY] = if (changeLane || wrongLook) Triple(0, LaneArrowStyle.OTHER, LaneArrowGlyph.STRAIGHT) else Triple(0, LaneArrowStyle.TARGET, targetGlyph)
+                // The Driving Context says the car's lane is not a route lane or cannot tell (UNKNOWN), or the wrong-lane look
+                // is held over a short gap: no green, no maneuver shape. Never red either, the lanes are unknown here.
+                val strip = LaneArrows.onRoad(LaneArrows.axisStrip(world, projector), road, imageH)
+                if (strip != null) {
+                    wanted[EGO_KEY] = if (changeLane || unresolved || wrongLook) Want(strip, LaneArrowStyle.OTHER, LaneArrowGlyph.STRAIGHT, null)
+                    else Want(strip, LaneArrowStyle.TARGET, targetGlyph, null)
+                }
             }
         }
+        val glideT = 1.0 - exp(-dt / LaneArrows.LAYOUT_TAU_S)
         for ((key, w) in wanted) {
-            val s = shown.getOrPut(key) { Shown(w.first, w.second, w.third, 0f, 1f) }
-            s.offset = w.first
-            s.style = w.second
-            s.glyph = w.third
+            val s = shown.getOrPut(key) { Shown(w.strip, w.style, w.glyph, 0f, 1f, w.lane) }
+            // The road's bottom edge comes from each segmentation run: it glides like the layout, so the near end does not jitter.
+            val was = s.strip.roadBottomY
+            val now = w.strip.roadBottomY
+            s.strip = if (was != null && now != null) w.strip.copy(roadBottomY = was + (now - was) * glideT) else w.strip
+            s.style = w.style
+            s.glyph = w.glyph
+            s.lane = w.lane
             s.target = 1f
         }
         val step = (dt / LaneArrows.FADE_S).toFloat()
@@ -406,22 +617,34 @@ class LaneArrowsBuilder {
         while (iter.hasNext()) {
             val (key, s) = iter.next()
             if (key !in wanted) {
+                // Fades out where it was drawn last. No red lingers once the layout is unusable or perception is stale, and
+                // no green once the lane requirement is UNKNOWN.
                 s.target = 0f
-                // No red lingers once lanes are unknown or perception is stale: the old car's-lane arrow fades out white.
                 if (s.style == LaneArrowStyle.WRONG) s.style = LaneArrowStyle.OTHER
+                if (unresolved && s.style != LaneArrowStyle.OTHER) { s.style = LaneArrowStyle.OTHER; s.glyph = LaneArrowGlyph.STRAIGHT }
             }
             s.alpha = if (s.alpha < s.target) min(s.target, s.alpha + step) else max(s.target, s.alpha - step)
             if (s.alpha <= 0f && s.target == 0f) iter.remove()
         }
 
+        // The emphasis fades too: no 0.9 <-> 0.55 jump when the lane choice comes and goes.
         val maneuverNear = route != null && route.maneuver != Maneuver.FOLLOW_ROAD && distance != null && distance <= LaneArrows.ACTIVE_M
-        val base = if (choice || maneuverNear) LaneArrows.ACTIVE_ALPHA else LaneArrows.IDLE_ALPHA
+        val baseTarget = if (choice || maneuverNear) LaneArrows.ACTIVE_ALPHA else LaneArrows.IDLE_ALPHA
+        val baseStep = step * (LaneArrows.ACTIVE_ALPHA - LaneArrows.IDLE_ALPHA)
+        base = when {
+            base.isNaN() -> baseTarget
+            base < baseTarget -> min(baseTarget, base + baseStep)
+            else -> max(baseTarget, base - baseStep)
+        }
         val pulse = LaneArrows.blink((nowNs - blinkStartNs) / 1e9)
-        val z0 = LaneArrows.startZ(projector)
         val arrows = ArrayList<LaneArrow>(shown.size)
         var minX = Float.MAX_VALUE; var minY = Float.MAX_VALUE; var maxX = -Float.MAX_VALUE; var maxY = -Float.MAX_VALUE
-        for ((key, s) in shown) {
-            val c = LaneArrows.center(ego, s.offset, z0, projector, map) ?: continue
+        // No road seen: nothing is drawn, not even the fades (they run on, so a one-run gap does not restart them from 0).
+        if (!noRoad) for ((key, s) in shown) {
+            val span = LaneArrows.span(s.strip, projector) ?: continue
+            // Fading out where it was placed: not once a newer outline puts its near end off the road.
+            if (key !in wanted && road != null && !LaneArrows.nearEndOnRoad(s.strip, span, road, projector)) continue
+            val c = LaneArrows.center(s.strip, span, projector, map)
             if (c.x < 0f || c.x > map.viewWidth || c.y < 0f || c.y > map.viewHeight) continue
             val factor = when (s.style) {
                 LaneArrowStyle.OTHER -> LaneArrows.OTHER_FACTOR
@@ -430,47 +653,60 @@ class LaneArrowsBuilder {
             }
             val alpha = s.alpha * base * factor
             if (alpha <= 0.01f) continue
-            val outline = LaneArrows.project(s.glyph, ego, s.offset, z0, projector, map) ?: continue
+            val outline = LaneArrows.project(s.glyph, s.strip, span, projector, map)
             for (p in outline) {
                 if (p.x < minX) minX = p.x
                 if (p.x > maxX) maxX = p.x
                 if (p.y < minY) minY = p.y
                 if (p.y > maxY) maxY = p.y
             }
-            arrows += LaneArrow(if (key == EGO_KEY) null else key, s.style, s.glyph, outline, alpha)
+            arrows += LaneArrow(s.lane, s.style, s.glyph, outline, alpha)
         }
         val occluders = if (arrows.isEmpty()) emptyList() else occluders(world, map, ViewRect(minX, minY, maxX, maxY))
-        return LaneArrowFrame(arrows, occluders, status(known, reason, targets, current))
+        val drivable = if (arrows.isEmpty() || road == null) emptyList() else road.map { map.point(it[0], it[1]) }
+        val status = status(lay, reason, guidance, unresolved, choiceTargets) + if (noRoad) " | no road" else ""
+        return LaneArrowFrame(arrows, occluders, drivable, status, lay)
     }
 
     /**
-     * Lane numbers are a mode over the last runs, so they change a few runs after the ego lane snapped to
-     * the next pair of lines. Until they catch up (or [SHIFT_HOLD_NS]), the snap is added to the lane
-     * number so every arrow stays on its own lane. A snap right after the lane number already moved the
-     * same way is not counted twice. Runs with unknown lane numbers keep this bookkeeping (a snap seen then
-     * still counts once they are back); the last lane number is forgotten after [SHIFT_HOLD_NS] unknown.
+     * Keys [to]'s lanes after a changed set of lines: a lane that was in the layout displayed last keeps its key
+     * (matched by [LaneArrows.lineOffset]; the same lines give the same keys), a new one gets a new key. An arrow
+     * whose lane left the layout is no lane of it any more and fades out where it was drawn.
      */
-    private fun trackLaneChange(mode: Int?, nowNs: Long, laneShift: Int) {
-        if (mode != null) {
-            val prev = lastMode
-            lastMode = mode
-            lastModeNs = nowNs
-            if (prev != null && mode != prev) {
-                if (shift != 0) { shift = 0; shiftNs = NONE } else { modeChangeNs = nowNs; modeChangeDir = if (mode > prev) 1 else -1 }
-            }
-        } else if (lastMode != null && nowNs - lastModeNs > SHIFT_HOLD_NS) {
-            lastMode = null
+    private fun rekey(to: LaneLayout) {
+        val d = keyed?.let { LaneArrows.lineOffset(it, to) }
+        val next = IntArray(to.laneCount) { i -> if (d != null && i - d in keys.indices) keys[i - d] else nextKey++ }
+        for (k in keys) if (k !in next) shown[k]?.lane = null
+        keyed = to
+        keys = next
+    }
+
+    /**
+     * Wrong-lane look: on after 0.8 s of "the car's lane not in the targets", off 0.3 s after reaching a target.
+     * A lane choice lost for up to 0.4 s (one poor lanes run) keeps the look and pauses the timer, so unknown
+     * time never counts as wrong-lane time; nothing red is drawn meanwhile.
+     */
+    private fun debounce(choice: Boolean, rawWrong: Boolean, nowNs: Long) {
+        if (!choice) {
+            if (choiceLostNs == NONE) choiceLostNs = nowNs
+            if (nowNs - choiceLostNs > CHOICE_HOLD_NS) { wrongLook = false; pendingNs = NONE }
+            return
         }
-        if (laneShift != 0) {
-            val dir = if (laneShift > 0) 1 else -1
-            if (modeChangeNs != NONE && nowNs - modeChangeNs <= MODE_FIRST_NS && dir == modeChangeDir && shift == 0) {
-                modeChangeNs = NONE
-            } else {
-                shift = (shift + laneShift).coerceIn(-2, 2)
-                shiftNs = nowNs
-            }
+        if (choiceLostNs != NONE) {
+            if (pendingNs != NONE) pendingNs += nowNs - choiceLostNs
+            choiceLostNs = NONE
         }
-        if (shift != 0 && nowNs - shiftNs > SHIFT_HOLD_NS) { shift = 0; shiftNs = NONE }
+        if (rawWrong == wrongLook) {
+            pendingNs = NONE
+            return
+        }
+        if (pendingNs == NONE) pendingNs = nowNs
+        val need = if (wrongLook) LaneArrows.RIGHT_AFTER_S else LaneArrows.WRONG_AFTER_S
+        if ((nowNs - pendingNs) / 1e9 >= need - 1e-9) {
+            wrongLook = rawWrong
+            pendingNs = NONE
+            if (wrongLook) blinkStartNs = nowNs
+        }
     }
 
     private fun occluders(world: WorldSnapshot, map: FillCenter, bounds: ViewRect): List<ViewRect> {
@@ -487,24 +723,20 @@ class LaneArrowsBuilder {
         return out
     }
 
-    private fun status(known: KnownLanes?, reason: String, targets: List<Int>, current: Int?): String {
-        if (known == null) return "lanes unknown: $reason"
+    private fun status(layout: LaneLayout?, reason: String?, guidance: LaneGuidance?, unresolved: Boolean, targets: List<Int>): String {
+        if (layout == null) return if (reason == null) "layout unknown" else "layout unknown: $reason"
         return buildString {
-            append("lanes ").append(current ?: known.currentLane).append('/').append(known.laneCount)
-            append(" conf ").append(LaneArrows.fmt(known.confidence, 2))
-            if (targets.isNotEmpty()) append(" targets ").append(targets.joinToString(","))
+            append("layout ").append(layout.egoLane).append('/').append(layout.laneCount)
+            append(" q").append(LaneArrows.fmt(layout.quality, 2))
+            if (guidance != null) append(" targets ").append(if (targets.isEmpty()) "-" else targets.joinToString(","))
+            else if (unresolved) append(" targets ?")
             if (wrongLook) append(" WRONG")
-            if (shift != 0) append(" shift ").append(if (shift > 0) "+$shift" else "$shift")
         }
     }
 
     companion object {
         const val EGO_KEY = 0
         private const val NONE = Long.MIN_VALUE
-        private const val LINES_HOLD_NS = 400_000_000L
         private const val CHOICE_HOLD_NS = 400_000_000L
-        /** Longer than the server's lane-number vote needs to catch up without a lane-change event (~2 s). */
-        private const val SHIFT_HOLD_NS = 2_500_000_000L
-        private const val MODE_FIRST_NS = 800_000_000L
     }
 }

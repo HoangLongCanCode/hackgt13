@@ -1,6 +1,7 @@
 package com.drivingassist.spatialcopilot.nav
 
 import com.drivingassist.copilot.context.FrameTiming
+import com.drivingassist.copilot.context.LaneLayout
 import com.drivingassist.copilot.context.LanesState
 import com.drivingassist.copilot.context.LaneSide
 import com.drivingassist.copilot.context.Maneuver
@@ -31,6 +32,8 @@ import kotlin.math.cos
  * - The car ahead drives in lane 3 at 30 m; once it is in the ego lane it closes to 5 m (TOO CLOSE) at
  *   24 s and drops back to 30 m by 32 s.
  * - The exit counts down from 420 m to 0.
+ * The lane arrows sit on the lane layout of the scripted lines ([LaneLayout.from], as the WorldModel builds it) and
+ * are clipped to the road between the outer lines (`road.drivablePolygon`).
  * All numbers are made up and labelled DEMO on screen.
  */
 object DemoDrive {
@@ -110,17 +113,19 @@ object DemoDrive {
             AnchorPoint(name, listOf(x.toDouble(), row), listOf(lateral, z), true)
         }
         val lanes = Lanes(currentLane = lane, laneCount = LANE_COUNT, laneBoundaries = boundaries, confidence = 0.9)
+        // The drivable road: the area between the outer lines, 3 to 63 m ahead (26 points).
+        val drivable = boundaries.first() + boundaries.last().asReversed()
         return WorldSnapshot(
             timing = FrameTiming("demo", seq, seq, t, 0L, 0L, 0.0, 0.0, 0.0, FPS, FPS, seq, 0L),
             image = ImageSize(IMAGE_W, IMAGE_H),
             camera = camera,
             objects = mapOf(car.id to car),
             lanes = LanesState(lanes, currentLane = lane, laneCount = LANE_COUNT, measuredPts = t, ageSeconds = 0.0),
-            road = RoadState(Road(drivableCoverage = 0.4, horizonY = HORIZON, anchorPoints = anchors), measuredPts = t, ageSeconds = 0.0),
+            road = RoadState(Road(drivableCoverage = 0.4, horizonY = HORIZON, anchorPoints = anchors, drivablePolygon = drivable), measuredPts = t, ageSeconds = 0.0),
             signs = listOfNotNull(sign(t, shift)),
             perceptionStale = false,
             revision = seq,
-        )
+        ).let { it.copy(laneLayout = LaneLayout.from(it)) } // DEMO builds snapshots itself: the bridge's layout of its lines
     }
 
     /** The car ahead, in lane 3: the right neighbour lane before the change, the ego lane after it. */

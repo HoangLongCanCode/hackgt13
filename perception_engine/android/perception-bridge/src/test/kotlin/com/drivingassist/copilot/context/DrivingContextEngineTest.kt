@@ -3,6 +3,7 @@ package com.drivingassist.copilot.context
 import com.drivingassist.copilot.context.DrivingContextEngine.Companion.nextFollowingState
 import com.drivingassist.copilot.context.TestFrames.car
 import com.drivingassist.copilot.context.TestFrames.frame
+import com.drivingassist.copilot.context.TestFrames.laneLines
 import com.drivingassist.copilot.context.TestFrames.lanes
 import com.drivingassist.copilot.context.TestFrames.light
 import com.drivingassist.copilot.context.TestFrames.pedestrian
@@ -48,11 +49,14 @@ class DrivingContextEngineTest {
         assertEquals(FollowingState.CRITICAL, go(6.5))
         assertEquals(FollowingState.CRITICAL, go(8.0), "stays CRITICAL until above 9 m")
         assertEquals(FollowingState.CLOSE, go(9.5))
-        assertEquals(FollowingState.CRITICAL, go(30.0, ttc = 1.5), "TTC alone can trigger CRITICAL")
-        assertEquals(FollowingState.CRITICAL, go(30.0, ttc = 2.2))
-        assertEquals(FollowingState.CLOSE, go(30.0, ttc = 3.0))
+        assertEquals(FollowingState.CRITICAL, go(10.0, ttc = 1.5), "TTC can trigger CRITICAL under 12 m")
+        assertEquals(FollowingState.CRITICAL, go(12.5, ttc = 2.2), "stays CRITICAL up to 13 m")
+        assertEquals(FollowingState.CLOSE, go(12.5, ttc = 3.0))
+        assertEquals(FollowingState.CLOSE, go(30.0, ttc = 1.5), "never TOO CLOSE at 12 m or more, whatever the TTC")
         assertEquals(FollowingState.NORMAL, go(null))
         assertEquals(FollowingState.CLOSE, nextFollowingState(FollowingState.NORMAL, 30.0, null, 1.2, t), "headway when ego speed is known")
+        assertEquals(FollowingState.CLOSE, nextFollowingState(FollowingState.NORMAL, 20.0, null, 0.6, t), "a 0.6 s headway at 20 m is CLOSE, not TOO CLOSE")
+        assertEquals(FollowingState.CRITICAL, nextFollowingState(FollowingState.NORMAL, 11.0, null, 0.6, t), "the same headway under 12 m is TOO CLOSE")
     }
 
     @Test
@@ -115,7 +119,8 @@ class DrivingContextEngineTest {
     @Test
     fun `lane guidance tells the driver to move right for the exit`() {
         fun nav(d: Double) = NavigationState(Maneuver.EXIT, d, "Exit 23B", requiredLanes = listOf(3))
-        var ev = step(frame(seq++, lanes = lanes(1)), nav(400.0))
+        repeat(2) { step(frame(seq++, lanes = laneLines(1))) } // the layout is stable from the third lanes run
+        var ev = step(frame(seq++, lanes = laneLines(1)), nav(400.0))
         val change = ev.single { it.type == DrivingEventType.CHANGE_LANE_RIGHT }
         assertEquals(Priority.UPCOMING_NAVIGATION, change.priority)
         assertEquals(2, change.lanesToMove)
@@ -123,28 +128,39 @@ class DrivingContextEngineTest {
         assertEquals("Prepare to move right two lanes for Exit 23B.", change.speech)
         assertEquals(DrivingEventType.EXIT, ev.single { it.priority == Priority.UPCOMING_NAVIGATION && it.type == DrivingEventType.EXIT }.type)
 
-        ev = step(frame(seq++, lanes = lanes(1)), nav(390.0))
+        ev = step(frame(seq++, lanes = laneLines(1)), nav(390.0))
         assertTrue(ev.isEmpty(), "no repeat while nothing changes: $ev")
 
-        ev = step(frame(seq++, lanes = lanes(1)), nav(280.0))
+        ev = step(frame(seq++, lanes = laneLines(1)), nav(280.0))
         assertEquals(Priority.IMMEDIATE_NAVIGATION, ev.single { it.type == DrivingEventType.CHANGE_LANE_RIGHT }.priority, "escalates")
 
-        // Driver moves to lane 3 (lane number needs a few frames to win the mode filter).
-        repeat(4) { ev = step(frame(seq++, lanes = lanes(3)), nav(250.0)) }
+        // Driver moves two lanes right, 0.7 m per lanes run (the lines move with the car, the layout follows them).
+        for (k in 1..10) ev = step(frame(seq++, lanes = laneLines(1, offset = 0.7 * k)), nav(250.0))
         val g = engine.context.value.laneGuidance!!
         assertEquals(LaneAction.KEEP_LANE, g.action)
-        assertEquals(3, g.currentLane)
+        assertEquals(3 to 3, g.currentLane to g.laneCount)
     }
 
     @Test
     fun `keep lane after a completed change is spoken, lane side resolves with lane count`() {
         val nav = NavigationState(Maneuver.TURN_RIGHT, 200.0, "University Blvd", requiredSide = LaneSide.RIGHT)
-        step(frame(seq++, lanes = lanes(1, count = 2)), nav)
+        repeat(2) { step(frame(seq++, lanes = laneLines(1, count = 2))) }
+        step(frame(seq++, lanes = laneLines(1, count = 2)), nav)
         assertEquals(LaneAction.CHANGE_LANE_RIGHT, engine.context.value.laneGuidance!!.action)
         assertEquals(listOf(2), engine.context.value.laneGuidance!!.targetLanes)
         val events = mutableListOf<DrivingEvent>()
-        repeat(4) { events += step(frame(seq++, lanes = lanes(2, count = 2)), nav) }
+        for (k in 1..5) events += step(frame(seq++, lanes = laneLines(1, count = 2, offset = 0.7 * k)), nav)
         assertEquals("Stay in this lane for University Blvd.", events.single { it.type == DrivingEventType.KEEP_LANE }.speech)
+    }
+
+    @Test
+    fun `the server's lane numbers alone give no lane numbers`() {
+        val nav = NavigationState(Maneuver.EXIT, 400.0, "Exit 23B", requiredLanes = listOf(3))
+        repeat(3) { step(frame(seq++, lanes = lanes(1, confidence = 0.95)), nav) }
+        val g = engine.context.value.laneGuidance!!
+        assertEquals(LaneAction.UNKNOWN, g.action, "lane 1 of 3 at 0.95 from the server, but no lines: unknown")
+        assertNull(g.currentLane)
+        assertTrue(g.text.startsWith("USE LANE 3"), g.text)
     }
 
     @Test

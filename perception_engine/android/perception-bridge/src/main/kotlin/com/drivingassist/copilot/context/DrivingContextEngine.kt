@@ -20,7 +20,9 @@ import kotlin.math.roundToInt
  *
  * Navigation comes from the phase1 route engine (`navigation.packet` -> [NavigationMapper]); this
  * engine does not plan routes. It combines the route's next maneuver / distance / required lane with
- * the perceived lanes (`lanes.currentLane`) into lane guidance ("PREPARE TO MOVE RIGHT | 2 LANES").
+ * the perceived lanes ([WorldSnapshot.laneLayout], built from the detected lane lines; never the server's
+ * `lanes.currentLane`) into lane guidance ("PREPARE TO MOVE RIGHT | 2 LANES").
+ * The lead vehicle for the following distance is the nearest one in the car's own lane ([WorldSnapshot.leadVehicle]).
  *
  * Staleness (plan §38): when [WorldSnapshot.perceptionStale] is set (or no perception has arrived
  * yet) every object / distance / light / sign alert is suppressed and only navigation guidance is
@@ -106,33 +108,44 @@ class DrivingContextEngine(
         perceptionWasStale = stale
 
         // --- Following distance (§18) ---------------------------------------------------------
-        val lead = world.leadVehicle(config.leadMaxDistanceMeters)
+        val lead = world.leadVehicle(
+            maxDistanceMeters = config.leadMaxDistanceMeters,
+            maxLayoutAgeSeconds = config.maxLayoutAgeSeconds,
+            corridorHalfWidthMeters = config.leadCorridorHalfWidthMeters,
+        )
+        // The distance the state (and every text / FollowingInfo) uses: a low-confidence one cross-checked on the ground.
+        val leadDistance = lead?.let { followingDistance(world, it) }
+        val leadTtc = lead?.let { o ->
+            val raised = leadDistance != null && o.distanceMeters != null && leadDistance > o.distanceMeters
+            if (raised && o.ttcSource == "range_rate") o.closingSpeedMps?.takeIf { it > 0.0 }?.let { round2(leadDistance!! / it) } else o.ttcSeconds
+        }
         val egoSpeed = navigation?.egoSpeedMps
-        val headway = lead?.distanceMeters?.let { d -> egoSpeed?.takeIf { it > 1.0 }?.let { d / it } }
-        val raw = if (stale) FollowingState.NORMAL else nextFollowingState(following, lead?.distanceMeters, lead?.ttcSeconds, headway, config.following)
+        val headway = leadDistance?.let { d -> egoSpeed?.takeIf { it > 1.0 }?.let { d / it } }
+        val raw = if (stale) FollowingState.NORMAL else nextFollowingState(following, leadDistance, leadTtc, headway, config.following)
         // Optional speed gate: stopped behind a car is close, not closing in (unknown speed never gates).
         val speedGate = config.criticalMinEgoSpeedMps
-        val next = if (raw == FollowingState.CRITICAL && speedGate != null && egoSpeed != null && egoSpeed < speedGate) FollowingState.CLOSE else raw
-        val dText = lead?.distanceMeters?.let { "${fmt1(it)} m" } ?: "--"
+        val belowGate = speedGate != null && egoSpeed != null && egoSpeed < speedGate
+        val next = if (raw == FollowingState.CRITICAL && belowGate) FollowingState.CLOSE else raw
+        val dText = leadDistance?.let { "${fmt1(it)} m" } ?: "--"
         val leadName = lead?.cls?.wire?.uppercase() ?: "VEHICLE"
         if (next != following && !stale) {
             out += when (next) {
-                FollowingState.CRITICAL -> event(DrivingEventType.VEHICLE_TOO_CLOSE, Priority.CRITICAL_SAFETY, "VEHICLE TOO CLOSE | $dText", "Vehicle too close.", lead?.distanceMeters, lead?.id)
+                FollowingState.CRITICAL -> event(DrivingEventType.VEHICLE_TOO_CLOSE, Priority.CRITICAL_SAFETY, "VEHICLE TOO CLOSE | $dText", "Vehicle too close.", leadDistance, lead?.id)
                 FollowingState.CLOSE -> event(
                     DrivingEventType.FOLLOWING_CLOSE, Priority.TRAFFIC_ALERT, "$leadName | $dText",
-                    if (following == FollowingState.NORMAL) "${lead?.cls?.wire?.replaceFirstChar { it.uppercase() } ?: "Vehicle"} ahead, ${lead?.distanceMeters?.roundToInt() ?: "unknown"} meters." else null,
-                    lead?.distanceMeters, lead?.id,
+                    if (following == FollowingState.NORMAL) "${lead?.cls?.wire?.replaceFirstChar { it.uppercase() } ?: "Vehicle"} ahead, ${leadDistance?.roundToInt() ?: "unknown"} meters." else null,
+                    leadDistance, lead?.id,
                 )
-                FollowingState.NORMAL -> event(DrivingEventType.FOLLOWING_NORMAL, Priority.GENERAL_INFORMATION, "DISTANCE | $dText", null, lead?.distanceMeters, lead?.id)
+                FollowingState.NORMAL -> event(DrivingEventType.FOLLOWING_NORMAL, Priority.GENERAL_INFORMATION, "DISTANCE | $dText", null, leadDistance, lead?.id)
             }
         }
         following = next
         when (next) {
-            FollowingState.CRITICAL -> alerts += event(DrivingEventType.VEHICLE_TOO_CLOSE, Priority.CRITICAL_SAFETY, "VEHICLE TOO CLOSE | $dText", null, lead?.distanceMeters, lead?.id)
-            FollowingState.CLOSE -> alerts += event(DrivingEventType.FOLLOWING_CLOSE, Priority.TRAFFIC_ALERT, "$leadName | $dText", null, lead?.distanceMeters, lead?.id)
+            FollowingState.CRITICAL -> alerts += event(DrivingEventType.VEHICLE_TOO_CLOSE, Priority.CRITICAL_SAFETY, "VEHICLE TOO CLOSE | $dText", null, leadDistance, lead?.id)
+            FollowingState.CLOSE -> alerts += event(DrivingEventType.FOLLOWING_CLOSE, Priority.TRAFFIC_ALERT, "$leadName | $dText", null, leadDistance, lead?.id)
             FollowingState.NORMAL -> Unit
         }
-        val followingInfo = FollowingInfo(next, lead?.id, lead?.cls, lead?.distanceMeters, lead?.ttcSeconds, lead?.relativeSpeedMps, headway?.let(::round2))
+        val followingInfo = FollowingInfo(next, lead?.id, lead?.cls, leadDistance, leadTtc, lead?.relativeSpeedMps, headway?.let(::round2))
 
         // --- Traffic light (§11, §20 marker "RED 120m") ---------------------------------------
         val light = selectLight(world)
@@ -159,8 +172,9 @@ class DrivingContextEngine(
         // --- Pedestrians in path (§17) ---------------------------------------------------------
         val peds = world.pedestriansInPath(config.pedestrianMaxDistanceMeters)
         peds.firstOrNull()?.let { p ->
-            val critical = (p.distanceMeters?.let { it <= config.pedestrianCriticalDistanceMeters } ?: false) ||
-                (p.ttcSeconds?.let { it <= config.pedestrianCriticalTtcSeconds } ?: false)
+            // Below the speed gate (waiting at a crosswalk) a pedestrian in the path is a traffic alert, not a critical one.
+            val critical = !belowGate && ((p.distanceMeters?.let { it <= config.pedestrianCriticalDistanceMeters } ?: false) ||
+                (p.ttcSeconds?.let { it <= config.pedestrianCriticalTtcSeconds } ?: false))
             val priority = if (critical) Priority.CRITICAL_SAFETY else Priority.TRAFFIC_ALERT
             val text = "PEDESTRIAN${p.distanceMeters?.let { " | ${it.roundToInt()} m" } ?: ""}"
             val e = event(DrivingEventType.PEDESTRIAN_IN_PATH, priority, text, "Pedestrian ahead.", p.distanceMeters, p.id)
@@ -267,6 +281,21 @@ class DrivingContextEngine(
         lastRevision = Long.MIN_VALUE
     }
 
+    /**
+     * The lead's distance for the following state: its [ObjectState.distanceMeters], or, when the server's
+     * [ObjectState.distanceConfidence] is below [DrivingContextConfig.leadDistanceCheckMaxConfidence], the larger of that and
+     * the flat-ground distance of its box bottom ([WorldSnapshot.flatGroundDistanceMeters]). Never smaller than the
+     * server's: on real_010 at 118.6-121.9 s the server said 3.3-4.9 m at confidence 0.05-0.26 (its camera height
+     * 0.68-0.71 m) while the box bottom on the road was about 10 m ahead, and TOO CLOSE followed at highway speed.
+     */
+    private fun followingDistance(world: WorldSnapshot, lead: ObjectState): Double? {
+        val d = lead.distanceMeters ?: return null
+        val conf = lead.distanceConfidence ?: return d
+        if (conf >= config.leadDistanceCheckMaxConfidence) return d
+        val ground = world.flatGroundDistanceMeters(lead) ?: return d
+        return if (ground > d) round2(ground) else d
+    }
+
     /** Where inferred lane guidance starts: [DrivingContextConfig.inferredLaneGuidanceStartMeters], farther at speed. */
     private fun inferredStart(egoSpeedMps: Double?): Double {
         val bySpeed = (egoSpeedMps ?: 0.0).coerceAtLeast(0.0) * config.inferredLaneGuidanceLeadSeconds
@@ -278,13 +307,14 @@ class DrivingContextEngine(
         val start = if (nav.laneHintInferred) inferredStart(nav.egoSpeedMps) else config.laneGuidanceStartMeters
         if (nav.distanceMeters > start) return null
         if (nav.requiredLanes.isEmpty() && nav.requiredSide == null) return null
-        val lanes = world.lanes?.takeIf { it.ageSeconds <= config.maxLanesAgeSeconds && it.lanes.confidence >= config.minLaneConfidence }
-        val count = lanes?.laneCount
-        val current = lanes?.currentLane
+        val layout = trustedLayout(world)
+        val current = layout?.egoLane
+        val count = layout?.laneCount
         val targets = when {
-            nav.requiredLanes.isNotEmpty() -> nav.requiredLanes.sorted()
+            nav.requiredLanes.isNotEmpty() -> nav.requiredLanes.sorted().let { l -> if (count != null) l.map { it.coerceIn(1, count) }.distinct() else l }
             nav.requiredSide == LaneSide.RIGHT && count != null -> listOf(count)
-            nav.requiredSide == LaneSide.LEFT -> listOf(1)
+            // Lane 1 only when it is ours: with line colours but no yellow left edge it may be an oncoming lane.
+            nav.requiredSide == LaneSide.LEFT && layout != null && layout.leftmostLaneIsOurs() -> listOf(1)
             else -> emptyList()
         }
         val immediate = priority == Priority.IMMEDIATE_NAVIGATION
@@ -306,6 +336,14 @@ class DrivingContextEngine(
         }
         return LaneGuidance(action, current, count, targets, move, priority, text)
     }
+
+    /**
+     * The layout lanes are numbered by: [WorldSnapshot.laneLayout] when [LaneLayout.stable] (the WorldModel's quality
+     * hysteresis) and at most [DrivingContextConfig.maxLayoutAgeSeconds] old. Null: the lane (and the lane count) is
+     * unknown, whatever the server's own `lanes.currentLane` says (on the recorded drives: lane 1 of 1-3 throughout,
+     * confidently, even with four to six lines visible).
+     */
+    private fun trustedLayout(world: WorldSnapshot): LaneLayout? = world.laneLayout?.takeIf { it.stableAndFresh(config.maxLayoutAgeSeconds) }
 
     private fun laneSpeech(g: LaneGuidance, nav: NavigationState): String? {
         val forWhat = nav.label?.let { " for $it" } ?: ""
@@ -359,9 +397,11 @@ class DrivingContextEngine(
         ): FollowingState {
             fun below(v: Double?, enter: Double, exit: Double, sticky: Boolean) = v != null && v < (if (sticky) exit else enter)
             val wasCritical = previous == FollowingState.CRITICAL
-            val critical = below(distanceMeters, t.criticalEnterMeters, t.criticalExitMeters, wasCritical) ||
+            // TOO CLOSE only with a measured distance under the cap (12 m), then by distance, TTC or headway.
+            val withinCap = below(distanceMeters, t.criticalMaxMeters, t.criticalMaxExitMeters, wasCritical)
+            val critical = withinCap && (below(distanceMeters, t.criticalEnterMeters, t.criticalExitMeters, wasCritical) ||
                 below(ttcSeconds, t.criticalEnterTtcSeconds, t.criticalExitTtcSeconds, wasCritical) ||
-                below(headwaySeconds, t.criticalEnterHeadwaySeconds, t.criticalExitHeadwaySeconds, wasCritical)
+                below(headwaySeconds, t.criticalEnterHeadwaySeconds, t.criticalExitHeadwaySeconds, wasCritical))
             if (critical) return FollowingState.CRITICAL
             val wasClose = previous != FollowingState.NORMAL
             val close = below(distanceMeters, t.closeEnterMeters, t.closeExitMeters, wasClose) ||

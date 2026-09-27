@@ -44,10 +44,11 @@ data class AppSettings(
     /** Spoken cues (visual alerts never depend on this). */
     val voice: Boolean = true,
     /**
-     * Hold TOO CLOSE at CLOSE while GPS says the tablet is (nearly) stopped. Off by default: in the
-     * monitor demo the tablet does not move, so its GPS speed says nothing about the drive on screen.
+     * Hold TOO CLOSE at CLOSE while the route speed says the car is (nearly) stopped: waiting at a red light
+     * behind a car is close, not closing in (an unknown speed never gates). On by default; turn it off when
+     * the camera films a monitor in LIVE, where the route speed is the tablet's own GPS, not the drive on screen.
      */
-    val gateCriticalBySpeed: Boolean = false,
+    val gateCriticalBySpeed: Boolean = true,
     /**
      * LIVE: the camera films a monitor playing a recorded drive (the demo set-up). The picture then has the
      * recording dash cam's geometry, so no lens intrinsics are sent. Off = windshield mount: send this lens.
@@ -99,7 +100,8 @@ data class AppSettings(
         private const val KEY_DEBUG = "debug"
         private const val KEY_MOUNT = "mount_height_m"
         private const val KEY_VOICE = "voice"
-        private const val KEY_SPEED_GATE = "gate_critical_by_speed"
+        /** A new key: every save wrote the old one, off (its old default), so saved settings get the new default once. */
+        private const val KEY_SPEED_GATE = "gate_critical_by_speed_v2"
         private const val KEY_MONITOR = "camera_on_monitor"
         private const val KEY_DESTINATION = "destination"
         private const val KEY_DESTINATION_LOCATION = "destination_location"
@@ -137,7 +139,7 @@ data class AppSettings(
                 debug = p.getBoolean(KEY_DEBUG, false),
                 mountHeightMeters = p.getFloat(KEY_MOUNT, 1.25f).toDouble(),
                 voice = p.getBoolean(KEY_VOICE, true),
-                gateCriticalBySpeed = p.getBoolean(KEY_SPEED_GATE, false),
+                gateCriticalBySpeed = p.getBoolean(KEY_SPEED_GATE, true),
                 cameraOnMonitor = p.getBoolean(KEY_MONITOR, true),
                 destination = p.getString(KEY_DESTINATION, null).orEmpty(),
                 destinationLocation = parseLocation(p.getString(KEY_DESTINATION_LOCATION, null)),

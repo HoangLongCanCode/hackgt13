@@ -1,7 +1,7 @@
 package com.drivingassist.copilot.context
 
 import com.drivingassist.copilot.context.TestFrames.frame
-import com.drivingassist.copilot.context.TestFrames.lanes
+import com.drivingassist.copilot.context.TestFrames.laneLines
 import com.drivingassist.copilot.perception.NavRouteState
 import com.drivingassist.copilot.perception.NavigationPacketMessage
 import com.drivingassist.copilot.perception.PerceptionCodec
@@ -278,8 +278,9 @@ class NavigationMapperTest {
         val world = WorldModel(clockMs = { 0L })
         val engine = DrivingContextEngine()
         val nav = NavigationMapper.toNavigationState(sample("navigation_packet_live.json"))!! // exit in 400 m, rightmost lane
-        // Driving in lane 1 of 3.
-        val r = engine.evaluate(world.update(frame(0, lanes = lanes(1, count = 3))), nav)
+        // Driving in lane 1 of 3 (the layout of the lines is stable from the third lanes run).
+        repeat(2) { world.update(frame(it.toLong(), lanes = laneLines(1, count = 3))) }
+        val r = engine.evaluate(world.update(frame(2, lanes = laneLines(1, count = 3))), nav)
         val g = assertNotNull(r.context.laneGuidance)
         assertEquals(LaneAction.CHANGE_LANE_RIGHT, g.action)
         assertEquals(listOf(3), g.targetLanes)
@@ -294,7 +295,8 @@ class NavigationMapperTest {
         val world = WorldModel(clockMs = { 0L })
         val engine = DrivingContextEngine()
         val base = NavigationMapper.toNavigationState(sample("navigation_packet_sim.json"))!! // turn right, inferred RIGHT
-        val s = world.update(frame(0, lanes = lanes(1, count = 2)))
+        repeat(2) { world.update(frame(it.toLong(), lanes = laneLines(1, count = 2))) }
+        val s = world.update(frame(2, lanes = laneLines(1, count = 2)))
         assertNull(engine.evaluate(s, base.copy(distanceMeters = 900.0)).context.laneGuidance, "900 m > 300 m: too early for an inferred hint")
         assertEquals(LaneAction.CHANGE_LANE_RIGHT, engine.evaluate(s, base.copy(distanceMeters = 250.0)).context.laneGuidance!!.action)
         assertNull(engine.evaluate(s, base.copy(distanceMeters = 250.0, offRoute = true)).context.laneGuidance, "off route: no lane guidance")

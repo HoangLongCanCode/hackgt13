@@ -59,7 +59,7 @@
     },
     {
       "id": "safety.pedestrian_critical", "class": "PERCEPTION", "family": "pedestrian", "priority": "CRITICAL_SAFETY", "enabledByDefault": true,
-      "condition": "nearest pedestriansInPath has distanceMeters <= 12 || ttcSeconds <= 3",
+      "condition": "nearest pedestriansInPath has distanceMeters <= 12 || ttcSeconds <= 3; not while stopped (speed gate on and navigation.egoSpeedMps known and below DrivingContextConfig.criticalMinEgoSpeedMps)",
       "persistenceMs": 200, "sharesEpisodeWith": "alert.pedestrian", "episodeEndMs": 2000, "maxPerEpisode": 2, "minRepeatMs": 6000,
       "escalation": { "skipTrafficCueIfCriticalWithinMs": 500, "earconOnlyIfTrafficSpeechFinishedWithinMs": 4000, "neverCutsTrafficCueOfSameEpisode": true },
       "earcon": "E1", "text": "Pedestrian very close.", "voiceProfile": "alert", "revalidateWindowMs": 1000,
@@ -67,7 +67,7 @@
     },
     {
       "id": "alert.pedestrian", "class": "PERCEPTION", "family": "pedestrian", "priority": "TRAFFIC_ALERT", "enabledByDefault": true,
-      "condition": "pedestriansInPath not empty and not critical",
+      "condition": "pedestriansInPath not empty and not critical; not while stopped (as safety.pedestrian_critical)",
       "persistenceMs": 200, "sharesEpisodeWith": "safety.pedestrian_critical", "episodeEndMs": 2000, "maxPerEpisode": 1, "minRepeatMs": 6000,
       "earcon": "E2", "text": "Pedestrian ahead.", "voiceProfile": "alert", "revalidateWindowMs": 1000,
       "revalidate": "a pedestrian was in path within the last revalidateWindowMs"
@@ -160,21 +160,21 @@
     },
     {
       "id": "lane.change_left", "class": "PERCEPTION", "family": "lane", "priority": "UPCOMING_NAVIGATION", "enabledByDefault": true, "flag": "speakLaneChange", "scope": "eventKey",
-      "trigger": "laneGuidance.action == CHANGE_LANE_LEFT continuously for stableMs with world lanes that saw lines (laneBoundaries not empty), confidence >= minConfidence and age <= maxAgeSeconds the whole time (any violation or a side change restarts it); every PERCEPTION gate; route present, not stale, not off route; d known and d - I(v) >= v * (duration + 1 s) for its text; laneHintInferred == false unless allowInferredLaneSide; once per (eventKey, side), a dropped request re-arms; not made when the event key already has, or still has due, maxPresentationsPerEventKey presentations",
-      "stableMs": 1500, "minConfidence": 0.6, "maxAgeSeconds": 1.0, "allowInferredLaneSide": true, "neverCuts": true, "ttlMs": 3000,
+      "trigger": "over the policy steps of the last evidenceWindowMs (a full window of this event key; a new event key starts over): laneGuidance.action == CHANGE_LANE_LEFT in >= evidenceShare of them, and a world laneLayout (built from the detected lane lines) present, stable, age <= maxAgeSeconds and quality >= minLayoutQuality in >= evidenceShare of them, and CHANGE_LANE_LEFT within the last lastAskWithinMs (a share, not a continuous run: the layout may lose a lane behind the A-pillar now and then); every PERCEPTION gate; route present, not stale, not off route; d known and d - I(v) >= v * (duration + 1 s) for its text; laneHintInferred == false unless allowInferredLaneSide; once per (eventKey, side), a dropped request re-arms; not made when the event key already has, or still has due, maxPresentationsPerEventKey presentations",
+      "evidenceWindowMs": 2000, "evidenceShare": 0.7, "lastAskWithinMs": 500, "revalidateWindowMs": 1000, "minLayoutQuality": 0.5, "maxAgeSeconds": 1.0, "allowInferredLaneSide": true, "neverCuts": true, "ttlMs": 3000,
       "text": "Move to the left lane, check for cars.", "textForTurn": "Move to the left lane for the turn, check for cars.", "textForExit": "Move to the left lane for the exit, check for cars.",
       "textSide": "Move left, check for cars.", "textSideForTurn": "Move left for the turn, check for cars.", "textSideForExit": "Move left for the exit, check for cars.", "voiceProfile": "nav",
       "note": "check for cars asks the driver to look; it never says the lane is free. TURN_LEFT / TURN_RIGHT use textForTurn, an exit (EXIT, or KEEP_* with an exit number) textForExit, anything else text. text / textForTurn / textForExit name the edge lane ('the right lane'), so they are used only when the target lanes include the edge lane on that side (laneCount for right, 1 for left) or the side was inferred; a middle target (a numeric requiredLane) uses textSide / textSideForTurn / textSideForExit, which say the side only. No lane number or count is spoken",
-      "revalidate": "at start the same side and event key still hold every condition but the stable time"
+      "revalidate": "at start the same event key, every condition of the last step but the evidence (gates, route, d - I(v) margin), and the same side asked for in more than half of the steps of the last revalidateWindowMs"
     },
     {
       "id": "lane.change_right", "class": "PERCEPTION", "family": "lane", "priority": "UPCOMING_NAVIGATION", "enabledByDefault": true, "flag": "speakLaneChange", "scope": "eventKey",
-      "trigger": "laneGuidance.action == CHANGE_LANE_RIGHT continuously for stableMs with world lanes that saw lines (laneBoundaries not empty), confidence >= minConfidence and age <= maxAgeSeconds the whole time (any violation or a side change restarts it); every PERCEPTION gate; route present, not stale, not off route; d known and d - I(v) >= v * (duration + 1 s) for its text; laneHintInferred == false unless allowInferredLaneSide; once per (eventKey, side), a dropped request re-arms; not made when the event key already has, or still has due, maxPresentationsPerEventKey presentations",
-      "stableMs": 1500, "minConfidence": 0.6, "maxAgeSeconds": 1.0, "allowInferredLaneSide": true, "neverCuts": true, "ttlMs": 3000,
+      "trigger": "over the policy steps of the last evidenceWindowMs (a full window of this event key; a new event key starts over): laneGuidance.action == CHANGE_LANE_RIGHT in >= evidenceShare of them, and a world laneLayout (built from the detected lane lines) present, stable, age <= maxAgeSeconds and quality >= minLayoutQuality in >= evidenceShare of them, and CHANGE_LANE_RIGHT within the last lastAskWithinMs (a share, not a continuous run: the layout may lose a lane behind the A-pillar now and then); every PERCEPTION gate; route present, not stale, not off route; d known and d - I(v) >= v * (duration + 1 s) for its text; laneHintInferred == false unless allowInferredLaneSide; once per (eventKey, side), a dropped request re-arms; not made when the event key already has, or still has due, maxPresentationsPerEventKey presentations",
+      "evidenceWindowMs": 2000, "evidenceShare": 0.7, "lastAskWithinMs": 500, "revalidateWindowMs": 1000, "minLayoutQuality": 0.5, "maxAgeSeconds": 1.0, "allowInferredLaneSide": true, "neverCuts": true, "ttlMs": 3000,
       "text": "Move to the right lane, check for cars.", "textForTurn": "Move to the right lane for the turn, check for cars.", "textForExit": "Move to the right lane for the exit, check for cars.",
       "textSide": "Move right, check for cars.", "textSideForTurn": "Move right for the turn, check for cars.", "textSideForExit": "Move right for the exit, check for cars.", "voiceProfile": "nav",
       "note": "check for cars asks the driver to look; it never says the lane is free. TURN_LEFT / TURN_RIGHT use textForTurn, an exit (EXIT, or KEEP_* with an exit number) textForExit, anything else text. text / textForTurn / textForExit name the edge lane ('the right lane'), so they are used only when the target lanes include the edge lane on that side (laneCount for right, 1 for left) or the side was inferred; a middle target (a numeric requiredLane) uses textSide / textSideForTurn / textSideForExit, which say the side only. No lane number or count is spoken",
-      "revalidate": "at start the same side and event key still hold every condition but the stable time"
+      "revalidate": "at start the same event key, every condition of the last step but the evidence (gates, route, d - I(v) margin), and the same side asked for in more than half of the steps of the last revalidateWindowMs"
     }
   ],
   "neverSpoken": [

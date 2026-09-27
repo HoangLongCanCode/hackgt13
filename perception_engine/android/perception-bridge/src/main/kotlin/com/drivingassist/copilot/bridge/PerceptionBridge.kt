@@ -3,6 +3,7 @@ package com.drivingassist.copilot.bridge
 import com.drivingassist.copilot.context.DrivingContext
 import com.drivingassist.copilot.context.DrivingContextEngine
 import com.drivingassist.copilot.context.DrivingEvent
+import com.drivingassist.copilot.context.EgoSpeedEstimator
 import com.drivingassist.copilot.context.NavigationMapper
 import com.drivingassist.copilot.context.NavigationState
 import com.drivingassist.copilot.context.WorldModel
@@ -73,7 +74,8 @@ import kotlin.math.roundToLong
  *   buffered result for the frame on screen; [world] follows the playback position.
  * - **video**: results of a clip the laptop plays itself (laptop-side testing).
  * - **navigation**: `navigation.packet`s from the phase1 route engine (relayed by the laptop) land
- *   in [navigation]; they also drive the Driving Context's lane guidance. [sendTripState] feeds
+ *   in [navigation]; they also drive the Driving Context's lane guidance, and give it the ego speed
+ *   ([EgoSpeedEstimator]: the smaller of the traveled-distance speed and phase1's lagging `speedMps`). [sendTripState] feeds
  *   live GPS to the relay; [searchPlaces] / [places] / [sendDestination] pick where it routes to.
  *   Route logic stays in phase1.
  *
@@ -169,6 +171,8 @@ class PerceptionBridge(
     @Volatile private var lastSimPublished: WorldSnapshot? = null
     @Volatile private var manualNavigation: NavigationState? = null
     @Volatile private var packetNavigation: NavigationState? = null
+    /** Ego speed of the packet stream ([NavigationState.egoSpeedMps]; fed on the socket thread only, [onNavigation]). */
+    private val egoSpeed = EgoSpeedEstimator()
     private var lastSessionId: String? = null
 
     /** `perception.hello.role` of the newest hello on this connection (null = the server has no roles). */
@@ -627,7 +631,7 @@ class PerceptionBridge(
             ignoredNavPackets.incrementAndGet()
             return
         }
-        val mapped = NavigationMapper.toNavigationState(msg, config.inferLaneSideFromManeuver)
+        val mapped = NavigationMapper.toNavigationState(msg, config.inferLaneSideFromManeuver, egoSpeed)
         synchronized(navLock) {
             val seq = navPackets.incrementAndGet()
             _navigation.value = NavigationUpdate.from(msg, now, seq)

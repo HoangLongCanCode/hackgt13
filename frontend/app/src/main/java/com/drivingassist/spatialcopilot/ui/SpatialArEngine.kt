@@ -52,6 +52,7 @@ private val Amber = Color(0xFFFFC56B)
 private val Alert = Color(0xFFFF5A4E)
 private val LaneGreen = Color(0xFF46E27A)
 private val LaneRed = Color(0xFFFF4B3E)
+private val LayoutViolet = Color(0xFFD69CFF)
 
 /** Debug-only top / bottom shade. */
 private val Vignette = Brush.verticalGradient(
@@ -65,16 +66,17 @@ private val Vignette = Brush.verticalGradient(
 private class ArPaths {
     val arrow = Path()
     val clip = Path()
+    val road = Path()
 }
 
 /**
  * Spatial AR Engine: draws, every display frame, the [ArScene] built from the session's world (moved to
  * display time), Driving Context and route. It decides nothing itself: lane arrows come from the lane
- * model and the Driving Context's lane guidance, the maneuver from phase1's route, the highlighted
- * vehicle from the Driving Context.
+ * layout (the detected lane lines through one vanishing point) and the Driving Context's lane guidance,
+ * the maneuver from phase1's route, the highlighted vehicle from the Driving Context.
  * Clean view: flat lane arrows on the road, the destination pin, and red brackets on the lead vehicle
  * in TOO CLOSE. Debug adds the shade, the chevron path, the CLOSE highlight and badges, every box, lane
- * lines, the fitted ego lane, anchors, the horizon and the lane state.
+ * lines, the lane layout and its vanishing point, the fitted ego lane, anchors, the horizon and the lane state.
  */
 @Composable
 fun SpatialArEngine(session: CopilotSession, debug: Boolean, modifier: Modifier = Modifier) {
@@ -107,9 +109,26 @@ fun SpatialArEngine(session: CopilotSession, debug: Boolean, modifier: Modifier 
     }
 }
 
-/** Filled arrows with a thin dark edge, never painted over the road users in [ArScene.occluders]. */
+/**
+ * Filled arrows with a thin dark edge, only on the drivable road ([ArScene.drivable]: never over the dashboard, hood
+ * or A-pillar) and never painted over the road users in [ArScene.occluders].
+ */
 private fun DrawScope.drawLaneArrows(scene: ArScene, paths: ArPaths) {
     if (scene.laneArrows.isEmpty()) return
+    val outline = scene.drivable
+    if (outline.size < 3) {
+        laneArrowsAroundOccluders(scene, paths)
+        return
+    }
+    val road = paths.road
+    road.reset()
+    road.moveTo(outline[0].x, outline[0].y)
+    for (i in 1 until outline.size) road.lineTo(outline[i].x, outline[i].y)
+    road.close()
+    clipPath(road) { laneArrowsAroundOccluders(scene, paths) }
+}
+
+private fun DrawScope.laneArrowsAroundOccluders(scene: ArScene, paths: ArPaths) {
     if (scene.occluders.isEmpty()) {
         laneArrowFills(scene, paths.arrow)
         return
@@ -192,6 +211,16 @@ private fun DrawScope.drawDebug(d: DebugLayer, textMeasurer: TextMeasurer) {
         drawLine(Color.White.copy(alpha = 0.35f), Offset(0f, y), Offset(size.width, y), 1.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 10f)))
     }
     d.laneLines.forEach { line -> polyline(line, Color.White.copy(alpha = 0.7f), 2.dp.toPx()) }
+    // The lane layout the arrows sit on (dimmed when too old / too poor to use), inserted lines dashed, and its vanishing point.
+    val layoutColor = LayoutViolet.copy(alpha = if (d.layoutUsed) 0.9f else 0.4f)
+    d.layoutLines.forEach { l -> polyline(l.points, layoutColor, 2.dp.toPx(), dashed = !l.detected) }
+    d.vanishingPoint?.let { vp ->
+        val r = 7.dp.toPx()
+        val c = Offset(vp.x, vp.y)
+        drawCircle(layoutColor, radius = r, center = c, style = Stroke(width = 2.dp.toPx()))
+        drawLine(layoutColor, Offset(vp.x - 1.8f * r, vp.y), Offset(vp.x + 1.8f * r, vp.y), 1.5.dp.toPx())
+        drawLine(layoutColor, Offset(vp.x, vp.y - 1.8f * r), Offset(vp.x, vp.y + 1.8f * r), 1.5.dp.toPx())
+    }
     polyline(d.egoLane, Cyan.copy(alpha = 0.9f), 2.dp.toPx(), dashed = true)
     d.anchors.forEach { drawCircle(Amber, radius = 4.dp.toPx(), center = Offset(it.x, it.y)) }
     d.boxes.forEach { (r, tag) -> debugBox(r, tag, textMeasurer) }

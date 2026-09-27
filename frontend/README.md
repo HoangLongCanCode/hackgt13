@@ -22,14 +22,24 @@ Tablet GPS --client.trip_state--> laptop relay -> spatial/phase1 (mock | Google)
 
 The **clean view** (the default) is for driving and shows only this:
 
-- **Lane arrows painted on the road**, one per lane, lying flat in perspective like road markings. The lanes come from
-  the lane model (`lanes.currentLane`, `laneCount`, the lane lines) and the lane the route needs from the Driving
-  Context's lane guidance. The target lane is green. In a wrong lane the car's own arrow turns red and the target
-  lane's arrow blinks slowly (after 0.8 s, so a flickering lane number does not flash it). Near the maneuver (100 m)
-  the target arrow takes the turn or exit shape. Without lane data (or with lane guidance UNKNOWN) only the car's own
-  lane gets an arrow, green, never red. Arrows are cut out around cars and people, and only show with a live route.
-  They are placed with the frame's `camera` block (focal, principal point, horizon, camera height) and the lane lines,
-  not with device pose, so they also work when the tablet films a monitor playing a drive.
+- **Lane arrows painted on the road**, one in every visible lane, lying flat between that lane's two painted lines and
+  pointing where the lines meet, 6 to 12 m ahead. The lanes are built on the tablet from the lines the lane model
+  detects (`lanes.laneBoundaries`, fitted through one vanishing point, so a tilted or turned phone still gets parallel
+  arrows; the bridge's `LaneLayout`), not from the model's lane numbers; lines beyond the yellow centre line (the
+  oncoming road) are left out, and a line missed on one run is kept for 2 s. The lane to drive in is green, the others
+  white: with no lane requirement that is the car's own lane; before a turn it is the leftmost visible lane for a left
+  turn and the rightmost for a right turn (Google routes carry no lane data, so this is inferred, from 300 m or 20 s of
+  travel out). A lane requirement the tablet cannot match to the visible lanes (lane guidance UNKNOWN) paints every
+  arrow white, the car's lane too. In a wrong lane the car's own arrow turns red and the target lane's arrow blinks
+  slowly (after 0.8 s, so a flickering lane does not flash it). Near the maneuver (100 m) the target arrow takes the
+  turn or exit shape. Without usable lines only the car's lane gets an arrow, along the camera's ground track (the
+  road's vanishing point, else the last one seen this session), never red. Arrows are drawn only on the visible road:
+  the server's drivable outline (`road.drivablePolygon`), never over the dashboard, hood or A-pillars, and a lane
+  whose middle misses that road gets none. When the server sees no road at all (an empty outline, e.g. stopped close
+  behind a car with only the crosswalk and median in view) no arrow is drawn; the instruction at the top still guides.
+  Arrows are cut out around cars and people, and only show with a live route. They use the frame's `camera` block
+  (focal, principal point, horizon, camera height, 1-2 m accepted), not device pose, so they also work when the tablet
+  films a monitor.
 - **Instruction** (top centre): "Drive straight", "Turn left in 900 ft", "Exit 94 in 0.6 mi", "Destination in 250 ft",
   with a small maneuver glyph. It names the next real maneuver (phase1's "continue" steps are skipped), in feet and
   miles like the voice. Beyond a mile it says "Drive straight" with the maneuver as a second line.
@@ -38,7 +48,12 @@ The **clean view** (the default) is for driving and shows only this:
   `--speed-limits osm` below). Nothing when unknown. A sign value is dropped after a turn or exit, when the map road
   changes, or after 10 minutes.
 - **TOO CLOSE**: red pulsing brackets on the lead vehicle and one pill, "TOO CLOSE · Vehicle ahead: 6.2 m" (also
-  "Pedestrian ahead: 9 m" for a pedestrian in the path at critical range). Only with a measured distance.
+  "Pedestrian ahead: 9 m" for a pedestrian in the path at critical range). Only with a measured distance under 12 m
+  (then below 7 m, under 2 s to collision, or under 0.8 s of headway at the route speed), and only for
+  a vehicle inside the car's own lane lines (without lines: within 1 m of the camera's ground track); cars in other
+  lanes never trigger it. While the route speed says the car is stopped (below 1.5 m/s, e.g. at a red light behind a
+  car) it is held at CLOSE: no pill and no voice. A settings switch, on by default; turn it off when the camera films a
+  monitor in LIVE, where the route speed is the tablet's own GPS. An unknown speed never holds it.
 - **Corner button** (bottom left): tap for settings (or to take control back), hold for the debug view. Next to it, only
   when something is wrong, one short line: "Laptop not connected", "Road alerts paused", "No GPS fix", "Route
   unavailable", ... In LIVE without a destination, a **Where to?** button.
@@ -147,15 +162,20 @@ Driving events and the route go through the deterministic cue rules of `../perce
 `audio_cues.v1.json` is copied into the APK at build time), then a one-at-a-time arbiter (CRITICAL cuts navigation),
 then one AudioTrack. TOO CLOSE is spoken once when it starts (after 250 ms, only when closing or moving), is not repeated
 while it holds, and re-arms only after the following state is back to NORMAL; a re-entry within 8 s plays the warning
-tone only. Sources: the laptop's `POST /tts` (ElevenLabs, fixed phrases fetched at start), then Android TextToSpeech,
+tone only. Pedestrian cues ("Pedestrian ahead.", "Pedestrian very close.") are not spoken while the route speed says
+the car is stopped (below 1.5 m/s, with the same "hold TOO CLOSE while stopped" switch), so people crossing in front
+of a car waiting at a light stay silent; moving, or with an unknown speed, they are spoken as usual. Sources: the laptop's `POST /tts` (ElevenLabs, fixed phrases fetched at start), then Android TextToSpeech,
 then earcons. Visuals never depend on audio; the settings can turn voice off.
 
 Navigation prompts: "Starting route to your destination.", "Drive straight for two miles." (a new maneuver more than a
 mile and a minute away), "In half a mile, take exit ninety-four." and "Take exit ninety-four." (exit numbers as words;
 Google ramps count as exits), "Turn left.". Lane change: "Move to the right lane for the exit, check for cars." (or "for
-the turn", or neither), once per maneuver, after the lane guidance has asked for the same side for 1.5 s on lane data
-with confidence 0.6 or more, and not once the maneuver prompt itself is due. It asks the driver to look; it never says
-the lane is free.
+the turn", or neither), once per maneuver, when over the last 2 s the lane guidance asked for the same side in 70 % of
+the steps (and within the last 0.5 s) and the lane layout (the lanes the bridge fits to the detected lines) was stable,
+of quality 0.5 or more and no older than 1 s in 70 % of them; the lane model's own confidence is not used. A share, not
+a continuous run, so a lane that drops out behind the A-pillar now and then does not keep it silent. Not once the
+maneuver prompt itself is due, and a queued cue is dropped once the side has lost most of the last second. It asks the
+driver to look; it never says the lane is free.
 
 ## Layout
 
