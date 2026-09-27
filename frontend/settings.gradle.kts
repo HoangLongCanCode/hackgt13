@@ -23,3 +23,6 @@ include(":perception-bridge")
 project(":perception-bridge").projectDir = file("../perception_engine/android/perception-bridge")
 include(":bridge-cli")
 project(":bridge-cli").projectDir = file("../perception_engine/android/bridge-cli")
+
+// Desktop viewer (JVM, Swing): the tablet's SIM mode on the laptop, built from the app's Android-free sources.
+include(":desktop")
